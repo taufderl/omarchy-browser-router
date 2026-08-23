@@ -22,15 +22,76 @@
 # it's handed to -- some Node options evaluate JavaScript, making that a
 # local code-execution path, and a browser could just as well interpret it
 # as one of its own flags. See codex-review.md.
+#
+# Ask mode (config: ask_new: true): a domain with no explicit route pops up
+# an Omarchy/Quickshell dialog instead of silently falling back to default.
+# That popup can't answer synchronously (QML can't block on a click), so
+# this reuses the done-file poll pattern Omarchy's own image picker already
+# uses for the same problem (see omarchy-menu-images). Every failure in that
+# path -- shell unreachable, popup busy, timeout, cancel -- falls through to
+# the same fallback as everything else, so ask mode can only ever add a
+# prompt, never weaken the fail-closed behavior above.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 CONFIG_TOOL="$SCRIPT_DIR/browser-router-config"
+ASK_TIMEOUT_SECONDS="${ASK_TIMEOUT_SECONDS:-30}"
 
 url="$1"
 
 fallback() { exec brave -- "$@"; }
 
 [[ -x $CONFIG_TOOL ]] || fallback "$url"
+
+# JSON-string-escape a value via python3 (already a hard dependency, and
+# plain string escaping has no WHATWG-style correctness trap the way URL
+# parsing does -- no reason to reach for node here).
+json_str() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+ask_and_resolve() {
+  local host=$1
+  local browsers_json selection_file done_file deadline choice remember binary open_result busy
+
+  browsers_json="$("$CONFIG_TOOL" installed 2>/dev/null)" || return 1
+  [[ -z $browsers_json || $browsers_json == "[]" ]] && return 1
+
+  busy="$(omarchy-shell shell call browser-router.ask isBusy "" 2>/dev/null)" || return 1
+  [[ $busy == "true" ]] && return 1
+
+  selection_file=$(mktemp)
+  done_file=$(mktemp)
+  rm -f "$done_file"
+  trap 'rm -f "$selection_file" "$done_file"' RETURN
+
+  local payload
+  payload=$(printf '{"host":%s,"browsers":%s,"selectionFile":%s,"doneFile":%s}' \
+    "$(json_str "$host")" "$browsers_json" "$(json_str "$selection_file")" "$(json_str "$done_file")")
+
+  open_result="$(omarchy-shell shell summon browser-router.ask "$payload" 2>/dev/null)" || return 1
+  [[ $open_result != "ok" ]] && return 1
+
+  deadline=$((SECONDS + ASK_TIMEOUT_SECONDS))
+  while [[ ! -e $done_file && $SECONDS -lt $deadline ]]; do
+    sleep 0.05
+  done
+  if [[ ! -e $done_file ]]; then
+    omarchy-shell shell call browser-router.ask cancelAsk "" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  [[ -s $selection_file ]] || return 1
+
+  choice="$(sed -n '1p' "$selection_file")"
+  remember="$(sed -n '2p' "$selection_file")"
+  [[ -z $choice ]] && return 1
+
+  if [[ $remember == "remember" ]]; then
+    "$CONFIG_TOOL" add "$choice" "$host" >/dev/null 2>&1
+  fi
+
+  binary="$("$CONFIG_TOOL" binary "$choice" 2>/dev/null)" || return 1
+  [[ -z $binary ]] && return 1
+  printf '%s' "$binary"
+}
 
 if [[ -z $url ]]; then
   binary="$("$CONFIG_TOOL" resolve "" 2>/dev/null)" || fallback
@@ -52,7 +113,14 @@ host="$(node -e '
 
 [[ -z $host ]] && fallback "$url"
 
-binary="$("$CONFIG_TOOL" resolve "$host" 2>/dev/null)" || fallback "$url"
-[[ -z $binary ]] && fallback "$url"
+binary="$("$CONFIG_TOOL" resolve-ask "$host" 2>/dev/null)"; rc=$?
+if (( rc == 0 )); then
+  [[ -z $binary ]] && fallback "$url"
+elif (( rc == 3 )); then
+  binary="$(ask_and_resolve "$host")" || fallback "$url"
+  [[ -z $binary ]] && fallback "$url"
+else
+  fallback "$url"
+fi
 
 exec "$binary" -- "$url"

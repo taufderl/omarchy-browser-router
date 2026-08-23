@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "browser-router.ask",
+  "name": "Browser Router: Ask",
+  "version": "0.1.0",
+  "author": "omarchy-browser-router",
+  "license": "MIT",
+  "description": "Popup shown by browser-router's ask mode to pick which browser opens a newly-seen domain.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": { "panel": "AskPopup.qml" }
+}
