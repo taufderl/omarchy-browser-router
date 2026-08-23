@@ -145,6 +145,20 @@ def load_validated(path: Path) -> dict:
     return data
 
 
+def write_config(path: Path, data: dict) -> None:
+    """Write `data` back out in canonical form: `default` first, then each
+    BROWSER_IDS key in order with its domains sorted and lowercased. Used by
+    every subcommand that edits the file, so the on-disk structure stays the
+    same regardless of which one last touched it."""
+    ordered = {"default": data["default"]}
+    for b in BROWSER_IDS:
+        ordered[b] = sorted(d.lower() for d in data.get(b, []))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yaml.safe_dump(ordered, f, default_flow_style=False, sort_keys=False)
+
+
 def resolve(data: dict, host: str) -> str:
     """Return the browser id to use for `host` (empty host -> default).
 
@@ -205,6 +219,12 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     print(f"OK: {path} is valid")
+
+    print(f"default: {data['default']}")
+    for browser in BROWSER_IDS:
+        count = len(data.get(browser, []))
+        if count:
+            print(f"{browser}: {count} domain{'s' if count != 1 else ''}")
 
     for parent, parent_browser, child, child_browser in find_overlaps(data):
         print(
@@ -268,13 +288,7 @@ def cmd_add(args: argparse.Namespace) -> int:
             print(f"  - {e}", file=sys.stderr)
         return 1
 
-    ordered = {"default": data["default"]}
-    for b in BROWSER_IDS:
-        ordered[b] = sorted(d.lower() for d in data.get(b, []))
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        yaml.safe_dump(ordered, f, default_flow_style=False, sort_keys=False)
+    write_config(path, data)
 
     print(f"Added '{domain}' -> '{browser}'")
     return 0
@@ -298,6 +312,41 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         return 1
 
     print(binary)
+    return 0
+
+
+def cmd_default(args: argparse.Namespace) -> int:
+    path = Path(args.config)
+    try:
+        data = load_validated(path)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    if args.browser is None:
+        print(data["default"])
+        return 0
+
+    old = data["default"]
+    new = args.browser
+    if new == old:
+        print(f"default is already '{old}'")
+        return 0
+
+    data["default"] = new
+
+    errors = validate(data)
+    if errors:
+        # Shouldn't happen -- new is one of BROWSER_IDS by argparse choices --
+        # but don't write a config we wouldn't accept ourselves.
+        print("error: refusing to write an invalid config:", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    write_config(path, data)
+
+    print(f"Set default: {old} -> {new}")
     return 0
 
 
@@ -337,6 +386,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_resolve.add_argument("host", help="hostname to resolve, or an empty string for the default")
     p_resolve.set_defaults(func=cmd_resolve)
+
+    p_default = sub.add_parser(
+        "default",
+        help="print the default browser, or set it if given one",
+        parents=[config_option],
+    )
+    p_default.add_argument(
+        "browser", nargs="?", default=None, choices=BROWSER_IDS, help="browser id to set as default"
+    )
+    p_default.set_defaults(func=cmd_default)
 
     return parser
 

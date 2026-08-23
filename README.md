@@ -84,9 +84,13 @@ Edit the file directly, or use the helper:
 
 ```sh
 browser-router-config              # usage
-browser-router-config check        # validate the config, warn about
-                                    # configured browsers that aren't installed
+browser-router-config check        # validate the config; prints the default
+                                    # and each nonzero browser's domain count,
+                                    # and warns about configured browsers that
+                                    # aren't installed or overlapping routes
 browser-router-config add chrome google.com
+browser-router-config default              # print the current default
+browser-router-config default brave        # change it
 ```
 
 `add` refuses domains that don't look like a plain hostname (no scheme,
