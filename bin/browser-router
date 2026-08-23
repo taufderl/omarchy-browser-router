@@ -85,16 +85,16 @@ ask_and_resolve() {
   [[ -z $choice ]] && return 1
 
   if [[ $remember == "remember" ]]; then
-    "$CONFIG_TOOL" add "$choice" "$host" >/dev/null 2>&1
+    "$CONFIG_TOOL" add "$choice" -- "$host" >/dev/null 2>&1
   fi
 
-  binary="$("$CONFIG_TOOL" binary "$choice" 2>/dev/null)" || return 1
+  binary="$("$CONFIG_TOOL" binary -- "$choice" 2>/dev/null)" || return 1
   [[ -z $binary ]] && return 1
   printf '%s' "$binary"
 }
 
 if [[ -z $url ]]; then
-  binary="$("$CONFIG_TOOL" resolve "" 2>/dev/null)" || fallback
+  binary="$("$CONFIG_TOOL" resolve -- "" 2>/dev/null)" || fallback
   [[ -z $binary ]] && fallback
   exec "$binary"
 fi
@@ -113,7 +113,7 @@ host="$(node -e '
 
 [[ -z $host ]] && fallback "$url"
 
-binary="$("$CONFIG_TOOL" resolve "$host" 2>/dev/null)"; rc=$?
+binary="$("$CONFIG_TOOL" resolve -- "$host" 2>/dev/null)"; rc=$?
 if (( rc == 0 )); then
   [[ -z $binary ]] && fallback "$url"
 elif (( rc == 3 )); then

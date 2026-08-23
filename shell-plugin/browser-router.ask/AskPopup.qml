@@ -43,6 +43,18 @@ Item {
   property string fontFamily: Style.font.menuFamily
   property int cardWidth: Math.min(Style.space(360), panel.width - Style.gapsOut * 2)
 
+  // The done-file signal must not be a plain truncating write to a fixed
+  // path: bash creates that path with mktemp, deletes it, then polls for
+  // it to reappear (see bin/browser-router), so the path is briefly
+  // unoccupied and its name is visible in this process's argv. Writing
+  // straight to it (`: > doneFile`) would follow a symlink planted there
+  // in that window. mktemp a fresh file (guaranteed not pre-existing) and
+  // `mv` it into place instead -- rename(2) replaces whatever's at the
+  // destination path without dereferencing it, symlink or not.
+  function touchDoneFileCmd(doneFile) {
+    return "t=$(mktemp); : > \"$t\"; mv -f \"$t\" " + Util.shellQuote(doneFile)
+  }
+
   // Writes the answer for the CURRENTLY ACTIVE request (root.selectionFile
   // / root.doneFile) and touches its done-file. Quoted via Util.shellQuote,
   // not string-interpolated raw -- same rule this project applies to every
@@ -50,7 +62,7 @@ Item {
   function resolveRequest(browser, remember) {
     var cmd = "printf '%s\\n%s\\n' " + Util.shellQuote(browser || "") + " " + Util.shellQuote(remember || "")
       + " > " + Util.shellQuote(root.selectionFile)
-      + "; : > " + Util.shellQuote(root.doneFile)
+      + "; " + root.touchDoneFileCmd(root.doneFile)
     Quickshell.execDetached(["bash", "-c", cmd])
   }
 
@@ -59,7 +71,7 @@ Item {
   // while another is already showing (see open()).
   function resolveEmptyFor(selectionFile, doneFile) {
     if (!selectionFile || !doneFile) return
-    var cmd = "> " + Util.shellQuote(selectionFile) + "; : > " + Util.shellQuote(doneFile)
+    var cmd = "> " + Util.shellQuote(selectionFile) + "; " + root.touchDoneFileCmd(doneFile)
     Quickshell.execDetached(["bash", "-c", cmd])
   }
 

@@ -193,6 +193,16 @@ that should be looked up, not assumed. `omarchy-launch-browser` already
 solves this the same way -- reusing its approach means one less thing to
 keep in sync with Omarchy's own browser installer.
 
+Worth being explicit about: this means `resolve_binary()` trusts whatever
+`Exec=` line it finds in the matching `.desktop` file under
+`~/.local/share/applications` (as well as the nix profile dir and
+`/usr/share/applications`) -- the first two are writable by the invoking
+user. Not a new privilege boundary (anything that can write there already
+runs as that user and can do anything else that user can), and it's the
+same trust model `omarchy-launch-browser` itself uses -- but it does mean
+`browser-router` implicitly trusts the integrity of every `.desktop` file
+under those paths, not just ones it manages itself.
+
 If you're editing `shell-plugin/browser-router.ask/AskPopup.qml` yourself:
 Quickshell's local-plugin hot-reload (which fires automatically on file
 save) reliably picks up changes to plain bar-widget-style plugins, but was
