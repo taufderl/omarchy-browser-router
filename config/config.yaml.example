@@ -1,8 +1,13 @@
 # browser-router config: which browser opens which domains.
 #
-# `default` is required and must name one of the browsers below -- it's
-# used for any domain not listed under a specific browser, and as the
-# fallback if the URL can't be parsed at all.
+# `default` is required and must name one of the browsers below, or the
+# literal value "ask" -- it's used for any domain not listed under a
+# specific browser (a URL that fails to parse always falls back to a real
+# browser regardless -- "ask" never blocks that path, see README).
+#
+# Setting `default: ask` turns on ask mode: instead of silently opening an
+# unlisted domain in a fallback browser, a popup asks you to pick one (and
+# whether to remember the choice). See the README's "Ask mode" section.
 #
 # Each browser key takes a list of domains. Listing a domain also covers
 # its subdomains (e.g. "google.com" covers "accounts.google.com"). A

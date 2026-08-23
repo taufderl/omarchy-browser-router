@@ -26,6 +26,18 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "browser-router" / "config.yaml"
 # hardcoding binary names: extending this to a new browser is one entry here.
 BROWSER_IDS = ["chromium", "chrome", "brave", "brave-origin", "edge", "firefox", "zen"]
 
+# `default` accepts any real browser id, or the literal "ask" to turn on
+# ask mode (see resolve()/should_ask()) -- one value, one meaning, rather
+# than a browser id plus a separate on/off flag next to it.
+DEFAULT_VALUES = BROWSER_IDS + ["ask"]
+
+# What plain `resolve` (which can't ask -- it must always return a real,
+# synchronous answer) falls back to when default is "ask" and nothing
+# explicit matched. Same browser bin/browser-router's own hardcoded
+# last-resort fallback uses, so both layers agree once neither has a real
+# answer to give.
+FALLBACK_BROWSER = "brave"
+
 BROWSER_DESKTOP_IDS = {
     "chromium": "chromium.desktop",
     "chrome": "google-chrome.desktop",
@@ -107,23 +119,20 @@ def load_raw(path: Path) -> dict:
 def validate(data: dict) -> list[str]:
     """Return a list of error strings. Empty list means valid."""
     errors: list[str] = []
-    known_keys = set(BROWSER_IDS) | {"default", "ask_new"}
+    known_keys = set(BROWSER_IDS) | {"default"}
 
     for key in data:
         if key not in known_keys:
             errors.append(
-                f"unknown key '{key}' (expected 'default', 'ask_new', or one of: {', '.join(BROWSER_IDS)})"
+                f"unknown key '{key}' (expected 'default' or one of: {', '.join(BROWSER_IDS)})"
             )
 
     if "default" not in data:
         errors.append("missing required key 'default'")
-    elif data["default"] not in BROWSER_IDS:
+    elif data["default"] not in DEFAULT_VALUES:
         errors.append(
-            f"'default: {data['default']!r}' must be one of: {', '.join(BROWSER_IDS)}"
+            f"'default: {data['default']!r}' must be 'ask' or one of: {', '.join(BROWSER_IDS)}"
         )
-
-    if "ask_new" in data and not isinstance(data["ask_new"], bool):
-        errors.append(f"'ask_new' must be true or false, got {data['ask_new']!r}")
 
     seen: dict[str, str] = {}
     for browser in BROWSER_IDS:
@@ -160,11 +169,11 @@ def load_validated(path: Path) -> dict:
 
 
 def write_config(path: Path, data: dict) -> None:
-    """Write `data` back out in canonical form: `default`, `ask_new`, then
-    each BROWSER_IDS key in order with its domains sorted and lowercased.
-    Used by every subcommand that edits the file, so the on-disk structure
+    """Write `data` back out in canonical form: `default`, then each
+    BROWSER_IDS key in order with its domains sorted and lowercased. Used
+    by every subcommand that edits the file, so the on-disk structure
     stays the same regardless of which one last touched it."""
-    ordered = {"default": data["default"], "ask_new": bool(data.get("ask_new", False))}
+    ordered = {"default": data["default"]}
     for b in BROWSER_IDS:
         ordered[b] = sorted(d.lower() for d in data.get(b, []))
 
@@ -204,20 +213,24 @@ def resolve_explicit(data: dict, host: str) -> str | None:
 
 def resolve(data: dict, host: str) -> str:
     """Return the browser id to use for `host` (empty host, or no explicit
-    route, -> default)."""
+    route, -> default -- or FALLBACK_BROWSER if default is "ask", since this
+    always returns a real answer synchronously and can't itself ask; use
+    resolve-ask/should_ask for that)."""
+    default = data["default"]
+    fallback = default if default != "ask" else FALLBACK_BROWSER
     if not host:
-        return data["default"]
+        return fallback
     explicit = resolve_explicit(data, host)
-    return explicit if explicit is not None else data["default"]
+    return explicit if explicit is not None else fallback
 
 
 def should_ask(data: dict, host: str) -> bool:
-    """True when ask mode should prompt for `host`: ask_new is on, there's
+    """True when ask mode should prompt for `host`: default is "ask", there's
     an actual hostname, and it has no explicit route. Never true for the
     empty-host/no-URL case or for a host that already resolves somewhere
     explicit -- ask mode only replaces the silent "fall back to default"
     branch, nothing else."""
-    return bool(data.get("ask_new")) and bool(host) and resolve_explicit(data, host) is None
+    return data.get("default") == "ask" and bool(host) and resolve_explicit(data, host) is None
 
 
 def find_overlaps(data: dict) -> list[tuple[str, str, str, str]]:
@@ -256,8 +269,6 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(f"OK: {path} is valid")
 
     print(f"default: {data['default']}")
-    if data.get("ask_new"):
-        print("ask_new: on")
     for browser in BROWSER_IDS:
         count = len(data.get(browser, []))
         if count:
@@ -270,7 +281,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    referenced = {data["default"]}
+    referenced = set() if data["default"] == "ask" else {data["default"]}
     referenced.update(b for b in BROWSER_IDS if data.get(b))
     for browser in sorted(referenced):
         if resolve_binary(browser) is None:
@@ -435,30 +446,6 @@ def cmd_resolve_ask(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_ask_new(args: argparse.Namespace) -> int:
-    path = Path(args.config)
-    try:
-        data = load_validated(path)
-    except ConfigError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
-
-    if args.state is None:
-        print("true" if data.get("ask_new") else "false")
-        return 0
-
-    new = args.state == "on"
-    old = bool(data.get("ask_new", False))
-    if new == old:
-        print(f"ask_new is already {'on' if old else 'off'}")
-        return 0
-
-    data["ask_new"] = new
-    write_config(path, data)
-    print(f"Set ask_new: {'on' if old else 'off'} -> {'on' if new else 'off'}")
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     # --config lives on each subcommand's own parser (via this shared
     # parent), not on the top-level parser too: argparse subparsers each
@@ -498,11 +485,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_default = sub.add_parser(
         "default",
-        help="print the default browser, or set it if given one",
+        help="print the default browser, or set it (or 'ask', to turn on ask mode) if given one",
         parents=[config_option],
     )
     p_default.add_argument(
-        "browser", nargs="?", default=None, choices=BROWSER_IDS, help="browser id to set as default"
+        "browser",
+        nargs="?",
+        default=None,
+        choices=DEFAULT_VALUES,
+        help="browser id to set as default, or 'ask' to prompt instead",
     )
     p_default.set_defaults(func=cmd_default)
 
@@ -522,20 +513,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_resolve_ask = sub.add_parser(
         "resolve-ask",
-        help="like resolve, but exits 3 instead of resolving when ask_new should prompt "
+        help="like resolve, but exits 3 instead of resolving when default: ask should prompt "
         "(used internally by browser-router)",
         parents=[config_option],
     )
     p_resolve_ask.add_argument("host", help="hostname to resolve, or an empty string for the default")
     p_resolve_ask.set_defaults(func=cmd_resolve_ask)
-
-    p_ask_new = sub.add_parser(
-        "ask-new",
-        help="print whether ask mode is on, or set it if given on/off",
-        parents=[config_option],
-    )
-    p_ask_new.add_argument("state", nargs="?", default=None, choices=["on", "off"], help="on or off")
-    p_ask_new.set_defaults(func=cmd_ask_new)
 
     return parser
 

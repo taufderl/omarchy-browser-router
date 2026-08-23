@@ -54,8 +54,6 @@ saved previous-default record on a reinstall.
 ```yaml
 default: brave
 
-ask_new: false
-
 chrome:
   - google.com
   - work-sso.example.com
@@ -74,12 +72,12 @@ firefox: []
 zen: []
 ```
 
-- `default` is required and must name one of the known browsers -- used
-  for any domain not listed elsewhere, and as the fallback when a URL can't
-  be parsed at all.
-- `ask_new` (optional, default `false`) turns on [ask mode](#ask-mode):
-  prompt instead of silently falling back to `default` for a domain with no
-  explicit route.
+- `default` is required and must name one of the known browsers, or the
+  literal value `ask` -- used for any domain not listed elsewhere. `ask`
+  turns on [ask mode](#ask-mode): prompt instead of silently falling back
+  to a fixed browser for a domain with no explicit route. A URL that can't
+  be parsed at all still falls back to a real browser regardless of this
+  setting -- see Ask mode.
 - Listing a domain also covers its subdomains: `google.com` covers
   `accounts.google.com`.
 - A domain may only be listed under one browser.
@@ -92,16 +90,14 @@ Edit the file directly, or use the helper:
 
 ```sh
 browser-router-config              # usage
-browser-router-config check        # validate the config; prints the default,
-                                    # ask_new state, and each nonzero browser's
-                                    # domain count, and warns about configured
-                                    # browsers that aren't installed or
-                                    # overlapping routes
+browser-router-config check        # validate the config; prints the default
+                                    # and each nonzero browser's domain count,
+                                    # and warns about configured browsers that
+                                    # aren't installed or overlapping routes
 browser-router-config add chrome google.com
 browser-router-config default              # print the current default
 browser-router-config default brave        # change it
-browser-router-config ask-new              # print whether ask mode is on
-browser-router-config ask-new on           # turn it on
+browser-router-config default ask          # turn on ask mode
 ```
 
 `add` refuses domains that don't look like a plain hostname (no scheme,
@@ -114,25 +110,29 @@ click.
 
 ## Ask mode
 
-With `ask_new: true`, a domain with no explicit route pops up an
-Omarchy/Quickshell dialog instead of silently opening in `default`: pick one
-of your *installed* browsers, and **Once** or **Remember** (defaults to
-Remember). Remember adds the exact domain you were about to visit to the
-browser you picked -- same as running `browser-router-config add` yourself
--- then opens it there; Once just opens it there without touching the
-config.
+With `default: ask`, a domain with no explicit route pops up an
+Omarchy/Quickshell dialog instead of silently opening in a fixed browser:
+pick one of your *installed* browsers, and **Once** or **Remember**
+(defaults to Remember). Remember adds the exact domain you were about to
+visit to the browser you picked -- same as running `browser-router-config
+add` yourself -- then opens it there; Once just opens it there without
+touching the config.
 
 Only triggers when everything else is already healthy: the URL parsed, the
 config is valid, and this specific hostname has no explicit route. A URL
-that won't parse, a missing `node`/`python3`, or an invalid config all still
-fail closed to `brave` exactly as without ask mode -- ask mode only ever
-replaces the one "silently fall back to default" branch, never any of the
-fail-closed ones.
+that won't parse, or a missing `node`/`python3`, still fails closed to
+`brave` exactly as with a real `default` -- `default: ask` only replaces
+what would otherwise be "silently open in a fixed fallback browser", never
+any of the fail-closed paths. The no-URL case (launching the browser with
+nothing to open) also never asks -- there's no domain to show -- it opens
+`default` if that's a real browser, or `brave` if `default` is itself
+`ask`.
 
 If nothing answers within 30 seconds (dialog left open, Quickshell not
-running, etc.) it falls back to `default`, same as cancelling. A second
-unmatched-domain link while the dialog is already open also falls back to
-`default` rather than interrupting the first one.
+running, etc.) it falls back to `brave`, same as cancelling -- since
+`default` is itself `ask` in this mode, there's no other fixed browser to
+fall back to. A second unmatched-domain link while the dialog is already
+open also falls back the same way rather than interrupting the first one.
 
 ## Uninstall
 
@@ -166,8 +166,8 @@ hand-edited data. Pass `--purge` to remove that too:
 Missing `node` or `python3`/PyYAML doesn't break anything -- every link
 just fails closed to `brave` (see above), and `install.sh` warns about it.
 Same for `omarchy-shell` (a running Omarchy Quickshell session) if
-`ask_new` is on: without it, ask mode just always falls back to `default`,
-same as `ask_new: false`.
+`default: ask` is set: without it, every domain just falls back to
+`brave` instead of prompting.
 
 ## Design notes
 
@@ -179,8 +179,8 @@ crafted link bypass routing entirely -- see `codlex-review.md` for the full
 writeup. The fix wasn't a patch to the shell logic; it was moving both URL
 parsing and config parsing out of shell entirely and into an actual parser
 for each (`node`'s `URL`, Python's PyYAML). `bin/browser-router` is now
-just glue: extract a hostname, ask `browser-router-config resolve` what to
-do with it, exec the answer.
+just glue: extract a hostname, ask `browser-router-config resolve-ask` what
+to do with it, exec the answer.
 
 Browser ids resolve to an actual executable by reading the `Exec=` line of
 that browser's installed `.desktop` file (`chromium.desktop`,

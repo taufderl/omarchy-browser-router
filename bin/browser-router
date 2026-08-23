@@ -23,7 +23,7 @@
 # local code-execution path, and a browser could just as well interpret it
 # as one of its own flags. See codex-review.md.
 #
-# Ask mode (config: ask_new: true): a domain with no explicit route pops up
+# Ask mode (config: default: ask): a domain with no explicit route pops up
 # an Omarchy/Quickshell dialog instead of silently falling back to default.
 # That popup can't answer synchronously (QML can't block on a click), so
 # this reuses the done-file poll pattern Omarchy's own image picker already

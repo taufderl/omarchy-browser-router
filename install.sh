@@ -80,7 +80,7 @@ if [[ -d $PLUGIN_SRC ]]; then
       echo "Note: an update to an already-loaded ask-mode popup needs a shell restart to fully take effect (a rescan alone can leave stale content showing) -- run: omarchy restart shell"
     fi
   else
-    echo "Warning: 'omarchy-shell' not found -- ask mode's popup won't work; ask_new will fail closed to default instead" >&2
+    echo "Warning: 'omarchy-shell' not found -- ask mode's popup won't work; default: ask will fail closed to brave instead" >&2
   fi
 else
   echo "Warning: shell-plugin/$PLUGIN_ID not found in this checkout, skipping ask-mode popup install" >&2
