@@ -1,38 +1,32 @@
 # omarchy-browser-router
 
-Routes links to two different browsers based on domain, on Omarchy/Hyprland:
-
-- Domains in a trusted list open in **Chrome** (kept as the "logged in to
-  things I trust" browser).
-- Everything else opens in **Brave** (the default for unknown links).
+Routes links to whichever browser their domain is configured for, on
+Omarchy/Hyprland. Supports google-chrome, chromium, brave, and firefox (for
+now -- adding another browser is a two-line change).
 
 ## How it works
 
-It's a small default-browser shim, using standard XDG mechanisms -- no
-Hyprland config involved:
+A default-browser shim using standard XDG mechanisms -- no Hyprland config
+involved:
 
-- `bin/browser-router` is a shell script that receives a URL, extracts its
-  hostname, checks it against `~/.config/browser-router/trusted-domains.txt`,
-  and execs either `google-chrome-stable` or `brave` with that URL.
-- `share/applications/browser-router.desktop` registers that script as an
-  installed application (`NoDisplay=true`, so it doesn't clutter app
+- `bin/browser-router` is the script registered as the default web browser.
+  It extracts a URL's hostname (via Node's WHATWG `URL` parser -- the same
+  standard Chromium implements) and asks `browser-router-config` which
+  browser that hostname routes to.
+- `bin/browser-router-config` owns `~/.config/browser-router/config.yaml`:
+  loading, validating, resolving a hostname to a browser, and editing it.
+  Written in Python with PyYAML rather than reimplementing a YAML parser in
+  shell -- see [Design notes](#design-notes).
+- `share/applications/browser-router.desktop` registers `browser-router` as
+  an installed application (`NoDisplay=true`, so it doesn't show up in app
   launchers).
-- `install.sh` sets it as the default handler for `http`/`https`/`text/html`
-  links via `xdg-mime`, which writes into `~/.config/mimeapps.list`.
+- `install.sh` points the relevant XDG mime defaults at it via `xdg-mime`,
+  which writes into `~/.config/mimeapps.list`.
 
-A trusted domain also matches its subdomains: listing `google.com` routes
-`accounts.google.com` to Chrome too. A lookalike like `evilgoogle.com` does
-**not** match `google.com` -- matching is exact-or-proper-subdomain, not a
-substring check.
-
-Hostname extraction uses Node's WHATWG `URL` parser -- the same standard
-Chromium implements -- rather than shell string manipulation. An earlier
-version parsed hosts with shell parameter expansion, which disagreed with
-Chromium on backslashes in the authority component and let a crafted link
-(e.g. `https://evil.example\@trusted.example/`) get routed into the trusted
-Chrome profile. See `codlex-review.md` for the full writeup. Any URL that
-fails to parse, isn't `http(s)`, or that can't be parsed at all (`node`
-missing) now fails closed to Brave.
+Any failure along the way -- an unparseable URL, a missing or invalid
+config, `node`/`python3` not installed -- fails closed to launching `brave`
+directly, so a config mistake can never silently open a link in some other
+configured browser.
 
 ## Install
 
@@ -40,27 +34,58 @@ missing) now fails closed to Brave.
 ./install.sh
 ```
 
-This installs `browser-router` to `~/.local/bin`, registers the desktop
-entry, creates `~/.config/browser-router/trusted-domains.txt` if it doesn't
-already exist, and points the relevant XDG mime defaults at it. It also
-records whatever was the default browser beforehand, so `uninstall.sh` can
-put it back.
+Installs both scripts to `~/.local/bin`, registers the desktop entry,
+creates `~/.config/browser-router/config.yaml` from the example if it
+doesn't already exist, and points XDG's mime defaults at it. Also records
+whatever was the default browser beforehand, so `uninstall.sh` can restore
+it, and runs `browser-router-config check` at the end so you see the
+resulting config's validity immediately.
 
-Safe to re-run; it won't overwrite an existing `trusted-domains.txt` or
-clobber the saved previous-default record on a reinstall.
+Safe to re-run: won't overwrite an existing `config.yaml` or clobber the
+saved previous-default record on a reinstall.
 
 ## Configure
 
-Edit `~/.config/browser-router/trusted-domains.txt`, one domain per line,
-`#` for comments:
+`~/.config/browser-router/config.yaml`:
 
-```
-# Domains that should open in Chrome instead of Brave.
-google.com
-work-sso.example.com
+```yaml
+default: brave
+
+google-chrome:
+  - google.com
+  - work-sso.example.com
+
+chromium:
+  - internal.example
+
+brave: []
+
+firefox: []
 ```
 
-No reload needed -- the file is read fresh on every link click.
+- `default` is required and must name one of the known browsers -- used
+  for any domain not listed elsewhere, and as the fallback when a URL can't
+  be parsed at all.
+- Listing a domain also covers its subdomains: `google.com` covers
+  `accounts.google.com`.
+- A domain may only be listed under one browser.
+
+Edit the file directly, or use the helper:
+
+```sh
+browser-router-config              # usage
+browser-router-config check        # validate the config, warn about
+                                    # configured browsers missing from PATH
+browser-router-config add google-chrome google.com
+```
+
+`add` refuses domains that don't look like a plain hostname (no scheme,
+path, or `@`) and domains already routed to a different browser. Note:
+`add` rewrites the whole file, so hand-added comments won't survive it --
+if you want to keep comments, edit by hand and skip `add`.
+
+No reload needed either way -- the config is read fresh on every link
+click.
 
 ## Uninstall
 
@@ -68,9 +93,9 @@ No reload needed -- the file is read fresh on every link click.
 ./uninstall.sh
 ```
 
-Restores whichever browser was the default before install, removes the
-script and desktop entry. Leaves `~/.config/browser-router/` (your trust
-list) in place by default, since it's hand-edited data. Pass `--purge` to
+Restores whichever browser was the default before install, removes both
+scripts and the desktop entry. Leaves `~/.config/browser-router/` (your
+config) in place by default, since it's hand-edited data. Pass `--purge` to
 remove that too:
 
 ```sh
@@ -81,9 +106,27 @@ remove that too:
 
 - `xdg-mime`, `update-desktop-database` (part of `xdg-utils`, standard on
   Omarchy)
-- `google-chrome-stable` and `brave` on `PATH`
-- `node` on `PATH`, for spec-compliant URL parsing. Without it the router
-  still runs safely, but fails closed to Brave for every link (see above).
+- `node`, for spec-compliant URL parsing
+- `python3` with PyYAML (Arch/Omarchy package: `python-yaml`), for config
+  parsing and routing
+- Whichever of `google-chrome-stable`, `chromium`, `brave`, `firefox` your
+  config actually routes to
+
+Missing `node` or `python3`/PyYAML doesn't break anything -- every link
+just fails closed to `brave` (see above), and `install.sh` warns about it.
+
+## Design notes
+
+An earlier version parsed URLs and the trust list with shell string
+manipulation. That URL parsing disagreed with Chromium on backslashes in
+the authority component (`https://evil.example\@trusted.example/` read as
+`trusted.example` in the shell, `evil.example` in Chromium), letting a
+crafted link bypass routing entirely -- see `codlex-review.md` for the full
+writeup. The fix wasn't a patch to the shell logic; it was moving both URL
+parsing and config parsing out of shell entirely and into an actual parser
+for each (`node`'s `URL`, Python's PyYAML). `bin/browser-router` is now
+just glue: extract a hostname, ask `browser-router-config resolve` what to
+do with it, exec the answer.
 
 ## Limitations
 

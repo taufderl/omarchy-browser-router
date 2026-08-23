@@ -1,27 +1,38 @@
 #!/bin/bash
-# Opens the given URL in Chrome if its domain is in the trusted list,
-# otherwise opens it in Brave. Registered as the default web browser
-# via share/applications/browser-router.desktop (see install.sh).
+# Opens the given URL in whichever browser its domain is routed to by
+# ~/.config/browser-router/config.yaml. Registered as the default web
+# browser via share/applications/browser-router.desktop (see install.sh).
 #
-# Hostname extraction is delegated to Node's WHATWG URL parser -- the same
-# URL standard Chromium implements -- rather than shell string manipulation.
-# Ad-hoc shell parsing disagreed with Chromium on backslashes in the
-# authority component (e.g. "https://evil\@trusted.example/"), letting a
-# crafted link get routed into the trusted Chrome profile. See
-# codlex-review.md. Any URL that fails to parse, isn't http(s), or that we
-# have no parser for fails closed to Brave.
+# This script only orchestrates; it does not parse URLs or the config
+# itself. Hostname extraction uses Node's WHATWG URL parser (the standard
+# Chromium implements) rather than shell string manipulation -- ad-hoc
+# shell parsing disagreed with Chromium on backslashes in the authority
+# component and let a crafted link bypass routing (see codlex-review.md).
+# Domain -> browser matching and config validation live in
+# browser-router-config (Python + PyYAML), for the same reason: don't
+# reimplement a structured-data parser in Bash.
+#
+# Any failure along the way -- missing node/python3, an unreadable or
+# invalid config, a URL that won't parse -- falls back to launching brave
+# directly, so a config mistake can never silently open a link in some
+# other configured browser.
 
-TRUSTED_FILE="$HOME/.config/browser-router/trusted-domains.txt"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+CONFIG_TOOL="$SCRIPT_DIR/browser-router-config"
 
 url="$1"
 
+fallback() { exec brave "$@"; }
+
+[[ -x $CONFIG_TOOL ]] || fallback "$url"
+
 if [[ -z $url ]]; then
-  exec brave
+  binary="$("$CONFIG_TOOL" resolve "" 2>/dev/null)" || fallback
+  [[ -z $binary ]] && fallback
+  exec "$binary"
 fi
 
-route_to_brave() { exec brave "$url"; }
-
-command -v node >/dev/null || route_to_brave
+command -v node >/dev/null || fallback "$url"
 
 host="$(node -e '
   try {
@@ -31,26 +42,11 @@ host="$(node -e '
   } catch {
     process.exit(1);
   }
-' "$url")" || route_to_brave
+' "$url")" || fallback "$url"
 
-[[ -z $host ]] && route_to_brave
+[[ -z $host ]] && fallback "$url"
 
-is_trusted=0
-if [[ -f $TRUSTED_FILE ]]; then
-  while IFS= read -r domain; do
-    domain="${domain%%#*}"
-    domain="$(echo "$domain" | xargs)"
-    [[ -z $domain ]] && continue
-    domain="${domain,,}"
-    if [[ $host == "$domain" || $host == *".$domain" ]]; then
-      is_trusted=1
-      break
-    fi
-  done <"$TRUSTED_FILE"
-fi
+binary="$("$CONFIG_TOOL" resolve "$host" 2>/dev/null)" || fallback "$url"
+[[ -z $binary ]] && fallback "$url"
 
-if (( is_trusted )); then
-  exec google-chrome-stable "$url"
-else
-  exec brave "$url"
-fi
+exec "$binary" "$url"

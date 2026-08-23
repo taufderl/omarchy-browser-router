@@ -1,0 +1,23 @@
+# browser-router config: which browser opens which domains.
+#
+# `default` is required and must name one of the browsers below -- it's
+# used for any domain not listed under a specific browser, and as the
+# fallback if the URL can't be parsed at all.
+#
+# Each browser key takes a list of domains. Listing a domain also covers
+# its subdomains (e.g. "google.com" covers "accounts.google.com"). A
+# domain may only appear under one browser.
+#
+# Known browser ids (for now): google-chrome, chromium, brave, firefox.
+#
+# Edit this by hand, or use: browser-router-config add <browser> <domain>
+
+default: brave
+
+google-chrome: []
+
+chromium: []
+
+brave: []
+
+firefox: []

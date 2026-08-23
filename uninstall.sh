@@ -2,15 +2,16 @@
 # Removes omarchy-browser-router and restores the previous default browser.
 #
 # Usage: ./uninstall.sh [--purge]
-#   --purge   Also delete ~/.config/browser-router (trusted-domains.txt and
-#             the saved previous-default record). Off by default, since
-#             trusted-domains.txt is hand-edited user data.
+#   --purge   Also delete ~/.config/browser-router (config.yaml and the
+#             saved previous-default record). Off by default, since
+#             config.yaml is hand-edited user data.
 set -euo pipefail
 
 PURGE=0
 [[ ${1:-} == "--purge" ]] && PURGE=1
 
 BIN_DEST="$HOME/.local/bin/browser-router"
+CONFIG_TOOL_DEST="$HOME/.local/bin/browser-router-config"
 DESKTOP_DEST="$HOME/.local/share/applications/browser-router.desktop"
 CONFIG_DIR="$HOME/.config/browser-router"
 PREVIOUS_DEFAULT_FILE="$CONFIG_DIR/previous-default.desktop"
@@ -35,14 +36,14 @@ else
   echo "  xdg-settings set default-web-browser google-chrome.desktop"
 fi
 
-rm -f "$BIN_DEST" "$DESKTOP_DEST"
+rm -f "$BIN_DEST" "$CONFIG_TOOL_DEST" "$DESKTOP_DEST"
 command -v update-desktop-database >/dev/null && update-desktop-database "$HOME/.local/share/applications"
 
 if (( PURGE )); then
   rm -rf "$CONFIG_DIR"
-  echo "Removed $CONFIG_DIR (trusted-domains.txt included)"
+  echo "Removed $CONFIG_DIR (config.yaml included)"
 else
-  echo "Left $CONFIG_DIR in place (trusted-domains.txt included). Pass --purge to remove it too."
+  echo "Left $CONFIG_DIR in place (config.yaml included). Pass --purge to remove it too."
 fi
 
 echo

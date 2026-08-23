@@ -5,9 +5,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 BIN_DEST="$HOME/.local/bin/browser-router"
+CONFIG_TOOL_DEST="$HOME/.local/bin/browser-router-config"
 DESKTOP_DEST="$HOME/.local/share/applications/browser-router.desktop"
 CONFIG_DIR="$HOME/.config/browser-router"
-TRUSTED_FILE="$CONFIG_DIR/trusted-domains.txt"
+CONFIG_FILE="$CONFIG_DIR/config.yaml"
 PREVIOUS_DEFAULT_FILE="$CONFIG_DIR/previous-default.desktop"
 
 MIME_TYPES=(
@@ -22,22 +23,29 @@ for cmd in xdg-mime update-desktop-database; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
 done
 
-for browser in google-chrome-stable brave; do
-  command -v "$browser" >/dev/null || echo "Warning: '$browser' not found on PATH. Install it or routing to it will fail." >&2
-done
+command -v node >/dev/null || echo "Warning: 'node' not found on PATH. It's required for safe hostname parsing (see codlex-review.md) -- without it every link fails closed to brave." >&2
 
-command -v node >/dev/null || echo "Warning: 'node' not found on PATH. It's required for safe hostname parsing (see codlex-review.md) -- without it every link fails closed to Brave and nothing ever routes to Chrome." >&2
+if command -v python3 >/dev/null; then
+  python3 -c "import yaml" 2>/dev/null || echo "Warning: PyYAML not found for python3 (Arch/Omarchy package: python-yaml). Without it, config validation and routing fail closed to brave." >&2
+else
+  echo "Warning: 'python3' not found on PATH. It's required for config validation and routing; without it every link fails closed to brave." >&2
+fi
+
+for browser in google-chrome-stable chromium brave firefox; do
+  command -v "$browser" >/dev/null || echo "Note: '$browser' not found on PATH. That's fine unless your config routes domains to it." >&2
+done
 
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$CONFIG_DIR"
 
 install -m 755 "$SCRIPT_DIR/bin/browser-router" "$BIN_DEST"
+install -m 755 "$SCRIPT_DIR/bin/browser-router-config" "$CONFIG_TOOL_DEST"
 install -m 644 "$SCRIPT_DIR/share/applications/browser-router.desktop" "$DESKTOP_DEST"
 
-if [[ ! -f $TRUSTED_FILE ]]; then
-  install -m 644 "$SCRIPT_DIR/config/trusted-domains.txt.example" "$TRUSTED_FILE"
-  echo "Created $TRUSTED_FILE (empty trust list -- edit it to add domains)"
+if [[ ! -f $CONFIG_FILE ]]; then
+  install -m 644 "$SCRIPT_DIR/config/config.yaml.example" "$CONFIG_FILE"
+  echo "Created $CONFIG_FILE (default: brave, no domains routed yet -- edit it or use browser-router-config add)"
 else
-  echo "Keeping existing $TRUSTED_FILE"
+  echo "Keeping existing $CONFIG_FILE"
 fi
 
 # Remember what was the default before we take it over, so uninstall.sh can
@@ -61,4 +69,6 @@ for mime in "${MIME_TYPES[@]}"; do
   echo "  $mime -> $(xdg-mime query default "$mime")"
 done
 echo
-echo "Edit $TRUSTED_FILE to choose which domains open in Chrome."
+"$CONFIG_TOOL_DEST" check --config "$CONFIG_FILE" || true
+echo
+echo "Edit $CONFIG_FILE, or run: browser-router-config add <browser> <domain>"

@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Validate, edit, and query browser-router's config.yaml.
+
+Config parsing and domain resolution live here in Python (with PyYAML)
+rather than being reimplemented in shell -- see codlex-review.md for why
+hand-rolled parsing of structured data is the wrong call for this tool.
+bin/browser-router shells out to this script's `resolve` subcommand for
+every link it opens; `check` and `add` are for interactive use.
+"""
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    print("error: PyYAML is required (Arch/Omarchy package: python-yaml)", file=sys.stderr)
+    sys.exit(1)
+
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "browser-router" / "config.yaml"
+
+# Known browser ids, for now. Extending this to a new browser just means
+# adding an entry here and to BROWSER_BINARIES.
+BROWSER_IDS = ["google-chrome", "chromium", "brave", "firefox"]
+
+BROWSER_BINARIES = {
+    "google-chrome": "google-chrome-stable",
+    "chromium": "chromium",
+    "brave": "brave",
+    "firefox": "firefox",
+}
+
+# A conservative hostname label pattern: lets through normal domains,
+# rejects anything that looks like it carries a scheme, path, userinfo,
+# or whitespace.
+_DOMAIN_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+)
+
+
+def is_valid_domain(domain: str) -> bool:
+    return bool(domain) and bool(_DOMAIN_RE.match(domain))
+
+
+class ConfigError(Exception):
+    """Config failed to load or validate. Message is human-readable."""
+
+
+def load_raw(path: Path) -> dict:
+    if not path.exists():
+        raise ConfigError(f"config file not found: {path}")
+    try:
+        with path.open("r") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ConfigError(f"invalid YAML in {path}: {e}") from e
+
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path}: top level must be a mapping, got {type(data).__name__}")
+    return data
+
+
+def validate(data: dict) -> list[str]:
+    """Return a list of error strings. Empty list means valid."""
+    errors: list[str] = []
+    known_keys = set(BROWSER_IDS) | {"default"}
+
+    for key in data:
+        if key not in known_keys:
+            errors.append(
+                f"unknown key '{key}' (expected 'default' or one of: {', '.join(BROWSER_IDS)})"
+            )
+
+    if "default" not in data:
+        errors.append("missing required key 'default'")
+    elif data["default"] not in BROWSER_IDS:
+        errors.append(
+            f"'default: {data['default']!r}' must be one of: {', '.join(BROWSER_IDS)}"
+        )
+
+    seen: dict[str, str] = {}
+    for browser in BROWSER_IDS:
+        if browser not in data:
+            continue
+        domains = data[browser]
+        if not isinstance(domains, list):
+            errors.append(f"'{browser}' must be a list of domains, got {type(domains).__name__}")
+            continue
+        for domain in domains:
+            if not isinstance(domain, str) or not is_valid_domain(domain.lower()):
+                errors.append(f"'{browser}' has an invalid domain entry: {domain!r}")
+                continue
+            domain = domain.lower()
+            if domain in seen:
+                if seen[domain] == browser:
+                    errors.append(f"'{browser}' lists '{domain}' more than once")
+                else:
+                    errors.append(
+                        f"'{domain}' is listed under both '{seen[domain]}' and '{browser}'"
+                    )
+            else:
+                seen[domain] = browser
+
+    return errors
+
+
+def load_validated(path: Path) -> dict:
+    data = load_raw(path)
+    errors = validate(data)
+    if errors:
+        raise ConfigError("\n".join(f"  - {e}" for e in errors))
+    return data
+
+
+def resolve(data: dict, host: str) -> str:
+    """Return the binary name to launch for `host` (empty host -> default)."""
+    default_binary = BROWSER_BINARIES[data["default"]]
+    if not host:
+        return default_binary
+
+    host = host.lower()
+    for browser in BROWSER_IDS:
+        for domain in data.get(browser, []):
+            domain = domain.lower()
+            if host == domain or host.endswith("." + domain):
+                return BROWSER_BINARIES[browser]
+
+    return default_binary
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    path = Path(args.config)
+    try:
+        data = load_raw(path)
+    except ConfigError as e:
+        print(f"FAIL: {e}", file=sys.stderr)
+        return 1
+
+    errors = validate(data)
+    if errors:
+        print(f"FAIL: {path} is invalid:", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    print(f"OK: {path} is valid")
+
+    import shutil
+
+    referenced = {data["default"]}
+    referenced.update(b for b in BROWSER_IDS if data.get(b))
+    for browser in sorted(referenced):
+        binary = BROWSER_BINARIES[browser]
+        if shutil.which(binary) is None:
+            print(f"warning: '{browser}' is configured but '{binary}' isn't on PATH", file=sys.stderr)
+
+    return 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    path = Path(args.config)
+    browser = args.browser
+    domain = args.domain.strip().lower()
+
+    if browser not in BROWSER_IDS:
+        print(f"error: unknown browser '{browser}' (expected one of: {', '.join(BROWSER_IDS)})", file=sys.stderr)
+        return 2
+
+    if not is_valid_domain(domain):
+        print(f"error: '{args.domain}' doesn't look like a plain domain (no scheme, path, or @)", file=sys.stderr)
+        return 2
+
+    try:
+        data = load_validated(path)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    for other in BROWSER_IDS:
+        if other == browser:
+            continue
+        if domain in [d.lower() for d in data.get(other, [])]:
+            print(f"error: '{domain}' is already routed to '{other}'; remove it there first", file=sys.stderr)
+            return 1
+
+    existing = [d.lower() for d in data.get(browser, [])]
+    if domain in existing:
+        print(f"'{domain}' is already routed to '{browser}'")
+        return 0
+
+    data.setdefault(browser, []).append(domain)
+
+    errors = validate(data)
+    if errors:
+        # Shouldn't happen given the checks above, but don't write a config
+        # we wouldn't accept ourselves.
+        print("error: refusing to write an invalid config:", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 1
+
+    ordered = {"default": data["default"]}
+    for b in BROWSER_IDS:
+        ordered[b] = sorted(d.lower() for d in data.get(b, []))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yaml.safe_dump(ordered, f, default_flow_style=False, sort_keys=False)
+
+    print(f"Added '{domain}' -> '{browser}'")
+    return 0
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    path = Path(args.config)
+    try:
+        data = load_validated(path)
+    except ConfigError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    print(resolve(data, args.host))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    # --config lives on each subcommand's own parser (via this shared
+    # parent), not on the top-level parser too: argparse subparsers each
+    # apply their own argument defaults to the namespace when invoked, so
+    # defining --config in both places lets the subparser's default silently
+    # clobber a value the top-level parser already set from the command
+    # line. Only supporting `browser-router-config check --config X` (flag
+    # after the subcommand), not before, sidesteps that entirely.
+    config_option = argparse.ArgumentParser(add_help=False)
+    config_option.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help=f"path to config.yaml (default: {DEFAULT_CONFIG_PATH})",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="browser-router-config",
+        description="Validate, edit, and query browser-router's config.yaml.",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    p_check = sub.add_parser("check", help="validate the config file", parents=[config_option])
+    p_check.set_defaults(func=cmd_check)
+
+    p_add = sub.add_parser("add", help="add a domain -> browser route", parents=[config_option])
+    p_add.add_argument("browser", choices=BROWSER_IDS, help="browser id")
+    p_add.add_argument("domain", help="domain to route to that browser")
+    p_add.set_defaults(func=cmd_add)
+
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="print the binary to launch for a hostname (used internally by browser-router)",
+        parents=[config_option],
+    )
+    p_resolve.add_argument("host", help="hostname to resolve, or an empty string for the default")
+    p_resolve.set_defaults(func=cmd_resolve)
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return 0
+
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
