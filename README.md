@@ -179,8 +179,8 @@ crafted link bypass routing entirely -- see `codlex-review.md` for the full
 writeup. The fix wasn't a patch to the shell logic; it was moving both URL
 parsing and config parsing out of shell entirely and into an actual parser
 for each (`node`'s `URL`, Python's PyYAML). `bin/browser-router` is now
-just glue: extract a hostname, ask `browser-router-config resolve-ask` what
-to do with it, exec the answer.
+just glue: extract a hostname, ask `browser-router-config resolve` what to
+do with it, exec the answer.
 
 Browser ids resolve to an actual executable by reading the `Exec=` line of
 that browser's installed `.desktop` file (`chromium.desktop`,

@@ -212,10 +212,11 @@ def resolve_explicit(data: dict, host: str) -> str | None:
 
 
 def resolve(data: dict, host: str) -> str:
-    """Return the browser id to use for `host` (empty host, or no explicit
-    route, -> default -- or FALLBACK_BROWSER if default is "ask", since this
-    always returns a real answer synchronously and can't itself ask; use
-    resolve-ask/should_ask for that)."""
+    """Return a browser id for `host` (empty host, or no explicit route,
+    -> default -- or FALLBACK_BROWSER if default is "ask"). Always a real
+    id, never the literal "ask": this is the synchronous half of
+    resolution, used once should_ask() (see cmd_resolve) has already said
+    no prompt is needed."""
     default = data["default"]
     fallback = default if default != "ask" else FALLBACK_BROWSER
     if not host:
@@ -342,27 +343,6 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_resolve(args: argparse.Namespace) -> int:
-    path = Path(args.config)
-    try:
-        data = load_validated(path)
-    except ConfigError as e:
-        print(str(e), file=sys.stderr)
-        return 1
-
-    browser = resolve(data, args.host)
-    binary = resolve_binary(browser)
-    if binary is None:
-        print(
-            f"'{browser}' is not installed (no {BROWSER_DESKTOP_IDS[browser]} found)",
-            file=sys.stderr,
-        )
-        return 1
-
-    print(binary)
-    return 0
-
-
 def cmd_default(args: argparse.Namespace) -> int:
     path = Path(args.config)
     try:
@@ -422,7 +402,16 @@ def cmd_binary(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_resolve_ask(args: argparse.Namespace) -> int:
+def cmd_resolve(args: argparse.Namespace) -> int:
+    """Print the binary to launch for a hostname and exit 0, or -- when
+    `default: ask` and this hostname has no explicit route -- print nothing
+    and exit 3 to signal the caller should prompt instead. One command, one
+    contract: a caller that doesn't handle exit 3 specially still gets
+    correct fail-closed behavior (empty stdout), it just won't offer to
+    ask. There is deliberately no separate "never signals ask" variant --
+    it existed briefly and was confusing (asking to resolve a domain while
+    silently hiding that this exact call would have prompted a real user
+    is worse than just telling the truth via the exit code)."""
     path = Path(args.config)
     try:
         data = load_validated(path)
@@ -475,14 +464,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("domain", help="domain to route to that browser")
     p_add.set_defaults(func=cmd_add)
 
-    p_resolve = sub.add_parser(
-        "resolve",
-        help="print the binary to launch for a hostname (used internally by browser-router)",
-        parents=[config_option],
-    )
-    p_resolve.add_argument("host", help="hostname to resolve, or an empty string for the default")
-    p_resolve.set_defaults(func=cmd_resolve)
-
     p_default = sub.add_parser(
         "default",
         help="print the default browser, or set it (or 'ask', to turn on ask mode) if given one",
@@ -511,14 +492,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_binary.add_argument("browser", choices=BROWSER_IDS, help="browser id")
     p_binary.set_defaults(func=cmd_binary)
 
-    p_resolve_ask = sub.add_parser(
-        "resolve-ask",
-        help="like resolve, but exits 3 instead of resolving when default: ask should prompt "
-        "(used internally by browser-router)",
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="print the binary to launch for a hostname, or exit 3 if default: ask should "
+        "prompt instead (used internally by browser-router)",
         parents=[config_option],
     )
-    p_resolve_ask.add_argument("host", help="hostname to resolve, or an empty string for the default")
-    p_resolve_ask.set_defaults(func=cmd_resolve_ask)
+    p_resolve.add_argument("host", help="hostname to resolve, or an empty string for the default")
+    p_resolve.set_defaults(func=cmd_resolve)
 
     return parser
 

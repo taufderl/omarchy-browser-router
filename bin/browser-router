@@ -113,7 +113,7 @@ host="$(node -e '
 
 [[ -z $host ]] && fallback "$url"
 
-binary="$("$CONFIG_TOOL" resolve-ask "$host" 2>/dev/null)"; rc=$?
+binary="$("$CONFIG_TOOL" resolve "$host" 2>/dev/null)"; rc=$?
 if (( rc == 0 )); then
   [[ -z $binary ]] && fallback "$url"
 elif (( rc == 3 )); then
