@@ -16,13 +16,19 @@
 # invalid config, a URL that won't parse -- falls back to launching brave
 # directly, so a config mistake can never silently open a link in some
 # other configured browser.
+#
+# Every exec of node or a browser puts `--` before the untrusted URL. Without
+# it, a URL argument starting with "-" is parsed as a CLI option of whatever
+# it's handed to -- some Node options evaluate JavaScript, making that a
+# local code-execution path, and a browser could just as well interpret it
+# as one of its own flags. See codex-review.md.
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 CONFIG_TOOL="$SCRIPT_DIR/browser-router-config"
 
 url="$1"
 
-fallback() { exec brave "$@"; }
+fallback() { exec brave -- "$@"; }
 
 [[ -x $CONFIG_TOOL ]] || fallback "$url"
 
@@ -42,11 +48,11 @@ host="$(node -e '
   } catch {
     process.exit(1);
   }
-' "$url")" || fallback "$url"
+' -- "$url")" || fallback "$url"
 
 [[ -z $host ]] && fallback "$url"
 
 binary="$("$CONFIG_TOOL" resolve "$host" 2>/dev/null)" || fallback "$url"
 [[ -z $binary ]] && fallback "$url"
 
-exec "$binary" "$url"
+exec "$binary" -- "$url"

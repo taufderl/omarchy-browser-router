@@ -6,21 +6,98 @@ and example configuration.
 
 ## Summary
 
-The earlier URL-parser differential has been addressed correctly: the router
-now obtains a normalized hostname through Node's WHATWG `URL` parser, accepts
-only HTTP(S), and fails closed to Brave on parsing or configuration failures.
+The earlier URL-parser differential has been addressed: the router obtains a
+normalized hostname through Node's WHATWG `URL` parser and accepts only
+HTTP(S). However, its invocation of Node does not terminate option parsing.
+Under the requested threat model, where the `url` parameter may be any string,
+a value beginning with `-` is interpreted as a Node option before the URL
+parser runs. Node options can execute JavaScript, making this a critical local
+code-execution vulnerability.
 
-One medium-severity policy-bypass issue remains in the new per-browser routing
-logic. Overlapping domain rules are resolved according to the hard-coded
-browser order rather than by the most-specific domain. A broad rule can
-therefore silently override a more-specific rule intended to isolate a site
-in a different browser.
+The same missing end-of-options delimiter reaches the fallback browser. There
+is also a separate policy-resolution issue: overlapping domain rules are
+resolved according to the hard-coded browser order rather than by the most-
+specific domain.
 
 | Severity | Finding |
 | --- | --- |
+| Critical | Untrusted URL is parsed as a Node command-line option |
+| Medium | Fallback browser receives an untrusted value without `--` |
 | Medium | Overlapping routes use browser order instead of most-specific match |
 
 ## Finding
+
+### Critical: Untrusted URL is parsed as a Node command-line option
+
+Affected code: `bin/browser-router`, the `node -e` invocation.
+
+The router invokes Node as follows:
+
+```bash
+node -e '...' "$url"
+```
+
+There is no `--` end-of-options delimiter between Node's own arguments and the
+untrusted value. Node therefore processes a value beginning with `-` as one of
+its CLI options instead of treating it as `process.argv[1]`. Some Node CLI
+options evaluate JavaScript. If an attacker can cause `browser-router` to be
+called with an arbitrary first argument, this enables code execution as the
+desktop user before hostname validation or the Brave fallback occurs.
+
+Only a benign probe was used in testing:
+
+```sh
+bin/browser-router --benign-switch
+```
+
+Node reported `bad option: --benign-switch`, confirming the value was parsed
+as a Node option. It should instead have been passed to the URL parser and
+rejected as a non-HTTP(S) URL.
+
+#### Recommendation
+
+Terminate Node option parsing:
+
+```bash
+node -e '...' -- "$url"
+```
+
+Keep the existing parse failure behavior after this change. Add a regression
+test with a harmless leading-dash string and assert that Node does not emit an
+option-parsing error and that the router selects the fallback.
+
+### Medium: Fallback browser receives an untrusted value without `--`
+
+Affected code: `bin/browser-router`, `fallback()`.
+
+The fallback currently executes:
+
+```bash
+exec brave "$@"
+```
+
+An input beginning with `-` is consequently passed as Brave's first argument,
+where it can be interpreted as a browser command-line option rather than a
+URL. This is reachable after the Node parsing failure above, and remains
+reachable even after that issue is fixed whenever URL parsing fails.
+
+The same benign probe was run with a capture-only Brave substitute. The
+substitute received `--benign-switch` as its only argument, confirming that no
+`--` separator is supplied.
+
+#### Recommendation
+
+Terminate option parsing in both launch paths:
+
+```bash
+fallback() { exec brave -- "$@"; }
+# ...
+exec "$binary" -- "$url"
+```
+
+Confirm that every supported browser launcher accepts `--`; Chromium,
+Firefox, and their usual wrappers do. If a supported wrapper cannot, reject
+non-HTTP(S) inputs rather than forwarding them to the browser.
 
 ### Medium: Overlapping routes use browser order instead of most-specific match
 
@@ -81,11 +158,13 @@ different browsers.
 - The router rejects non-HTTP(S) schemes before route resolution.
 - YAML is loaded with `yaml.safe_load`, and config validation restricts
   browser identifiers and domain-shaped entries.
-- Route execution uses quoted arguments; no shell evaluation of the URL or
-  resolved browser executable was identified.
+- Shell quoting preserves URL metacharacters as one literal argument. A
+  benign string containing `$()`, `;`, and `>` was passed unchanged to a
+  capture-only browser and did not create its marker file. This does not
+  protect against the command-line option injection findings above.
 
 ## Review notes
 
-This was a source review with focused runtime checks of the URL and routing
-parsers. No high- or critical-severity issue was identified in the current
-codebase.
+This was a source review with focused runtime checks of URL handling, shell
+argument passing, and routing resolution. No payload that executed code or
+modified user data was used.
