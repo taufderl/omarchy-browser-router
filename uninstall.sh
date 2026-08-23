@@ -15,6 +15,7 @@ CONFIG_TOOL_DEST="$HOME/.local/bin/browser-router-config"
 DESKTOP_DEST="$HOME/.local/share/applications/browser-router.desktop"
 CONFIG_DIR="$HOME/.config/browser-router"
 PREVIOUS_DEFAULT_FILE="$CONFIG_DIR/previous-default.desktop"
+PLUGIN_DEST="$HOME/.config/omarchy/plugins/browser-router.ask"
 
 MIME_TYPES=(
   text/html
@@ -38,6 +39,14 @@ fi
 
 rm -f "$BIN_DEST" "$CONFIG_TOOL_DEST" "$DESKTOP_DEST"
 command -v update-desktop-database >/dev/null && update-desktop-database "$HOME/.local/share/applications"
+
+# No user data in the plugin directory -- always safe to remove outright,
+# no --purge gate needed (unlike $CONFIG_DIR).
+if [[ -d $PLUGIN_DEST ]]; then
+  rm -rf "$PLUGIN_DEST"
+  command -v omarchy-shell >/dev/null && omarchy-shell shell rescanPlugins >/dev/null 2>&1
+  echo "Removed the ask-mode popup ($PLUGIN_DEST)"
+fi
 
 if (( PURGE )); then
   rm -rf "$CONFIG_DIR"

@@ -22,6 +22,9 @@ involved:
   launchers).
 - `install.sh` points the relevant XDG mime defaults at it via `xdg-mime`,
   which writes into `~/.config/mimeapps.list`.
+- `shell-plugin/browser-router.ask/` is a local Omarchy/Quickshell plugin --
+  the popup shown in [ask mode](#ask-mode) for a domain with no explicit
+  route.
 
 Any failure along the way -- an unparseable URL, a missing or invalid
 config, `node`/`python3` not installed -- fails closed to launching `brave`
@@ -51,6 +54,8 @@ saved previous-default record on a reinstall.
 ```yaml
 default: brave
 
+ask_new: false
+
 chrome:
   - google.com
   - work-sso.example.com
@@ -72,6 +77,9 @@ zen: []
 - `default` is required and must name one of the known browsers -- used
   for any domain not listed elsewhere, and as the fallback when a URL can't
   be parsed at all.
+- `ask_new` (optional, default `false`) turns on [ask mode](#ask-mode):
+  prompt instead of silently falling back to `default` for a domain with no
+  explicit route.
 - Listing a domain also covers its subdomains: `google.com` covers
   `accounts.google.com`.
 - A domain may only be listed under one browser.
@@ -84,13 +92,16 @@ Edit the file directly, or use the helper:
 
 ```sh
 browser-router-config              # usage
-browser-router-config check        # validate the config; prints the default
-                                    # and each nonzero browser's domain count,
-                                    # and warns about configured browsers that
-                                    # aren't installed or overlapping routes
+browser-router-config check        # validate the config; prints the default,
+                                    # ask_new state, and each nonzero browser's
+                                    # domain count, and warns about configured
+                                    # browsers that aren't installed or
+                                    # overlapping routes
 browser-router-config add chrome google.com
 browser-router-config default              # print the current default
 browser-router-config default brave        # change it
+browser-router-config ask-new              # print whether ask mode is on
+browser-router-config ask-new on           # turn it on
 ```
 
 `add` refuses domains that don't look like a plain hostname (no scheme,
@@ -101,6 +112,28 @@ if you want to keep comments, edit by hand and skip `add`.
 No reload needed either way -- the config is read fresh on every link
 click.
 
+## Ask mode
+
+With `ask_new: true`, a domain with no explicit route pops up an
+Omarchy/Quickshell dialog instead of silently opening in `default`: pick one
+of your *installed* browsers, and **Once** or **Remember** (defaults to
+Remember). Remember adds the exact domain you were about to visit to the
+browser you picked -- same as running `browser-router-config add` yourself
+-- then opens it there; Once just opens it there without touching the
+config.
+
+Only triggers when everything else is already healthy: the URL parsed, the
+config is valid, and this specific hostname has no explicit route. A URL
+that won't parse, a missing `node`/`python3`, or an invalid config all still
+fail closed to `brave` exactly as without ask mode -- ask mode only ever
+replaces the one "silently fall back to default" branch, never any of the
+fail-closed ones.
+
+If nothing answers within 30 seconds (dialog left open, Quickshell not
+running, etc.) it falls back to `default`, same as cancelling. A second
+unmatched-domain link while the dialog is already open also falls back to
+`default` rather than interrupting the first one.
+
 ## Uninstall
 
 ```sh
@@ -108,9 +141,10 @@ click.
 ```
 
 Restores whichever browser was the default before install, removes both
-scripts and the desktop entry. Leaves `~/.config/browser-router/` (your
-config) in place by default, since it's hand-edited data. Pass `--purge` to
-remove that too:
+scripts, the desktop entry, and the ask-mode popup plugin (no `--purge`
+needed for the plugin -- it holds no user data). Leaves
+`~/.config/browser-router/` (your config) in place by default, since it's
+hand-edited data. Pass `--purge` to remove that too:
 
 ```sh
 ./uninstall.sh --purge
@@ -131,6 +165,9 @@ remove that too:
 
 Missing `node` or `python3`/PyYAML doesn't break anything -- every link
 just fails closed to `brave` (see above), and `install.sh` warns about it.
+Same for `omarchy-shell` (a running Omarchy Quickshell session) if
+`ask_new` is on: without it, ask mode just always falls back to `default`,
+same as `ask_new: false`.
 
 ## Design notes
 
@@ -155,6 +192,18 @@ weren't available to check against directly) is exactly the kind of thing
 that should be looked up, not assumed. `omarchy-launch-browser` already
 solves this the same way -- reusing its approach means one less thing to
 keep in sync with Omarchy's own browser installer.
+
+If you're editing `shell-plugin/browser-router.ask/AskPopup.qml` yourself:
+Quickshell's local-plugin hot-reload (which fires automatically on file
+save) reliably picks up changes to plain bar-widget-style plugins, but was
+observed here to sometimes leave a `keepLoaded` overlay plugin's *visual*
+tree stale (state/logic changes take effect immediately; the actual
+rendered content doesn't) after several rapid edits -- backend state
+(`isBusy`, etc.) staying correct made this easy to miss without actually
+looking at the screen. `omarchy restart shell` after an edit is the
+reliable way to see the real result; `rescanPlugins` alone isn't enough to
+trust once a `keepLoaded` overlay has already been loaded once this
+session.
 
 ## Limitations
 

@@ -11,6 +11,10 @@ CONFIG_DIR="$HOME/.config/browser-router"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 PREVIOUS_DEFAULT_FILE="$CONFIG_DIR/previous-default.desktop"
 
+PLUGIN_ID="browser-router.ask"
+PLUGIN_SRC="$SCRIPT_DIR/shell-plugin/$PLUGIN_ID"
+PLUGIN_DEST="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
+
 MIME_TYPES=(
   text/html
   x-scheme-handler/http
@@ -58,6 +62,29 @@ update-desktop-database "$HOME/.local/share/applications"
 for mime in "${MIME_TYPES[@]}"; do
   xdg-mime default browser-router.desktop "$mime"
 done
+
+# Ask mode's popup. No user-authored content in this directory -- always
+# safe to overwrite wholesale on reinstall/update.
+if [[ -d $PLUGIN_SRC ]]; then
+  plugin_preexisted=0
+  [[ -d $PLUGIN_DEST ]] && plugin_preexisted=1
+
+  mkdir -p "$(dirname "$PLUGIN_DEST")"
+  rm -rf "$PLUGIN_DEST"
+  cp -r "$PLUGIN_SRC" "$PLUGIN_DEST"
+
+  if command -v omarchy-shell >/dev/null; then
+    omarchy-shell shell rescanPlugins >/dev/null 2>&1 || echo "Warning: could not rescan omarchy-shell plugins -- ask mode's popup won't load until this succeeds" >&2
+    omarchy-shell shell enablePlugin "$PLUGIN_ID" '{}' >/dev/null 2>&1 || true
+    if (( plugin_preexisted )); then
+      echo "Note: an update to an already-loaded ask-mode popup needs a shell restart to fully take effect (a rescan alone can leave stale content showing) -- run: omarchy restart shell"
+    fi
+  else
+    echo "Warning: 'omarchy-shell' not found -- ask mode's popup won't work; ask_new will fail closed to default instead" >&2
+  fi
+else
+  echo "Warning: shell-plugin/$PLUGIN_ID not found in this checkout, skipping ask-mode popup install" >&2
+fi
 
 echo
 echo "Installed. Current defaults:"
