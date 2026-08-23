@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Browser Router
+Comment=Opens trusted domains in Chrome, everything else in Brave
+Exec=browser-router %u
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/about;x-scheme-handler/unknown;
+NoDisplay=true

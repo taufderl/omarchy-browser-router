@@ -1,0 +1,4 @@
+# Domains that should open in Chrome instead of Brave.
+# One domain per line. A trusted domain also matches its subdomains
+# (e.g. "google.com" matches "accounts.google.com" too).
+# Lines starting with # are ignored.

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Opens the given URL in Chrome if its domain is in the trusted list,
+# otherwise opens it in Brave. Registered as the default web browser
+# via share/applications/browser-router.desktop (see install.sh).
+
+TRUSTED_FILE="$HOME/.config/browser-router/trusted-domains.txt"
+
+url="$1"
+
+if [[ -z $url ]]; then
+  exec brave
+fi
+
+host="${url#*://}"
+host="${host%%[/?#]*}"
+host="${host##*@}"
+host="${host%%:*}"
+host="${host,,}"
+
+is_trusted=0
+if [[ -f $TRUSTED_FILE ]]; then
+  while IFS= read -r domain; do
+    domain="${domain%%#*}"
+    domain="$(echo "$domain" | xargs)"
+    [[ -z $domain ]] && continue
+    if [[ $host == "$domain" || $host == *".$domain" ]]; then
+      is_trusted=1
+      break
+    fi
+  done <"$TRUSTED_FILE"
+fi
+
+if (( is_trusted )); then
+  exec google-chrome-stable "$url"
+else
+  exec brave "$url"
+fi
