@@ -26,6 +26,8 @@ for browser in google-chrome-stable brave; do
   command -v "$browser" >/dev/null || echo "Warning: '$browser' not found on PATH. Install it or routing to it will fail." >&2
 done
 
+command -v node >/dev/null || echo "Warning: 'node' not found on PATH. It's required for safe hostname parsing (see codlex-review.md) -- without it every link fails closed to Brave and nothing ever routes to Chrome." >&2
+
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$CONFIG_DIR"
 
 install -m 755 "$SCRIPT_DIR/bin/browser-router" "$BIN_DEST"

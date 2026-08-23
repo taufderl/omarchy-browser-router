@@ -2,6 +2,14 @@
 # Opens the given URL in Chrome if its domain is in the trusted list,
 # otherwise opens it in Brave. Registered as the default web browser
 # via share/applications/browser-router.desktop (see install.sh).
+#
+# Hostname extraction is delegated to Node's WHATWG URL parser -- the same
+# URL standard Chromium implements -- rather than shell string manipulation.
+# Ad-hoc shell parsing disagreed with Chromium on backslashes in the
+# authority component (e.g. "https://evil\@trusted.example/"), letting a
+# crafted link get routed into the trusted Chrome profile. See
+# codlex-review.md. Any URL that fails to parse, isn't http(s), or that we
+# have no parser for fails closed to Brave.
 
 TRUSTED_FILE="$HOME/.config/browser-router/trusted-domains.txt"
 
@@ -11,11 +19,21 @@ if [[ -z $url ]]; then
   exec brave
 fi
 
-host="${url#*://}"
-host="${host%%[/?#]*}"
-host="${host##*@}"
-host="${host%%:*}"
-host="${host,,}"
+route_to_brave() { exec brave "$url"; }
+
+command -v node >/dev/null || route_to_brave
+
+host="$(node -e '
+  try {
+    const u = new URL(process.argv[1]);
+    if (u.protocol !== "http:" && u.protocol !== "https:") process.exit(1);
+    process.stdout.write(u.hostname.toLowerCase());
+  } catch {
+    process.exit(1);
+  }
+' "$url")" || route_to_brave
+
+[[ -z $host ]] && route_to_brave
 
 is_trusted=0
 if [[ -f $TRUSTED_FILE ]]; then
@@ -23,6 +41,7 @@ if [[ -f $TRUSTED_FILE ]]; then
     domain="${domain%%#*}"
     domain="$(echo "$domain" | xargs)"
     [[ -z $domain ]] && continue
+    domain="${domain,,}"
     if [[ $host == "$domain" || $host == *".$domain" ]]; then
       is_trusted=1
       break

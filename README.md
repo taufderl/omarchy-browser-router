@@ -25,6 +25,15 @@ A trusted domain also matches its subdomains: listing `google.com` routes
 **not** match `google.com` -- matching is exact-or-proper-subdomain, not a
 substring check.
 
+Hostname extraction uses Node's WHATWG `URL` parser -- the same standard
+Chromium implements -- rather than shell string manipulation. An earlier
+version parsed hosts with shell parameter expansion, which disagreed with
+Chromium on backslashes in the authority component and let a crafted link
+(e.g. `https://evil.example\@trusted.example/`) get routed into the trusted
+Chrome profile. See `codlex-review.md` for the full writeup. Any URL that
+fails to parse, isn't `http(s)`, or that can't be parsed at all (`node`
+missing) now fails closed to Brave.
+
 ## Install
 
 ```sh
@@ -73,6 +82,8 @@ remove that too:
 - `xdg-mime`, `update-desktop-database` (part of `xdg-utils`, standard on
   Omarchy)
 - `google-chrome-stable` and `brave` on `PATH`
+- `node` on `PATH`, for spec-compliant URL parsing. Without it the router
+  still runs safely, but fails closed to Brave for every link (see above).
 
 ## Limitations
 
