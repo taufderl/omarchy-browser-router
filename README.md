@@ -175,9 +175,10 @@ An earlier version parsed URLs and the trust list with shell string
 manipulation. That URL parsing disagreed with Chromium on backslashes in
 the authority component (`https://evil.example\@trusted.example/` read as
 `trusted.example` in the shell, `evil.example` in Chromium), letting a
-crafted link bypass routing entirely -- see `codlex-review.md` for the full
-writeup. The fix wasn't a patch to the shell logic; it was moving both URL
-parsing and config parsing out of shell entirely and into an actual parser
+crafted link bypass routing entirely -- see `docs/codex-review.md` for
+the full writeup. The fix wasn't a patch to the shell logic; it was
+moving both URL parsing and config parsing out of shell entirely and
+into an actual parser
 for each (`node`'s `URL`, Python's PyYAML). `bin/browser-router` is now
 just glue: extract a hostname, ask `browser-router-config resolve` what to
 do with it, exec the answer.

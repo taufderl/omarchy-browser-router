@@ -2,7 +2,7 @@
 """Validate, edit, and query browser-router's config.yaml.
 
 Config parsing and domain resolution live here in Python (with PyYAML)
-rather than being reimplemented in shell -- see codlex-review.md for why
+rather than being reimplemented in shell -- see docs/codex-review.md for why
 hand-rolled parsing of structured data is the wrong call for this tool.
 bin/browser-router shells out to this script's `resolve` subcommand for
 every link it opens; `check` and `add` are for interactive use.
@@ -189,7 +189,7 @@ def resolve_explicit(data: dict, host: str) -> str | None:
     whatever the default happens to be").
 
     Ties are broken by the longest (most specific) matching domain, not by
-    BROWSER_IDS order -- see codex-review.md. Browser routing is meant as an
+    BROWSER_IDS order -- see docs/codex-review.md. Browser routing is meant as an
     isolation boundary: a broad rule in a browser that happens to come first
     in BROWSER_IDS must not silently win over a more specific rule for a
     subdomain routed to a different browser.

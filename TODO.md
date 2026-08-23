@@ -9,7 +9,7 @@ either: it's there because the two jobs have different correctness
 requirements.
 
 **Why not just use Python:** verified directly against the exact attack URL
-from `codex-review.md` (`https://evil.example\@trusted.example/login`).
+from `docs/codex-review.md` (`https://evil.example\@trusted.example/login`).
 Python's `urllib.parse` (`urlsplit`/`urlparse`) and GLib's `GUri` both
 return `trusted.example` -- the same wrong answer the original vulnerable
 bash parser gave, not `evil.example` like real Chromium. Neither implements

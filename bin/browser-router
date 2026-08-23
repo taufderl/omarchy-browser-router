@@ -7,7 +7,7 @@
 # itself. Hostname extraction uses Node's WHATWG URL parser (the standard
 # Chromium implements) rather than shell string manipulation -- ad-hoc
 # shell parsing disagreed with Chromium on backslashes in the authority
-# component and let a crafted link bypass routing (see codlex-review.md).
+# component and let a crafted link bypass routing (see docs/codex-review.md).
 # Domain -> browser matching and config validation live in
 # browser-router-config (Python + PyYAML), for the same reason: don't
 # reimplement a structured-data parser in Bash.
@@ -21,7 +21,7 @@
 # it, a URL argument starting with "-" is parsed as a CLI option of whatever
 # it's handed to -- some Node options evaluate JavaScript, making that a
 # local code-execution path, and a browser could just as well interpret it
-# as one of its own flags. See codex-review.md.
+# as one of its own flags. See docs/codex-review.md.
 #
 # Ask mode (config: default: ask): a domain with no explicit route pops up
 # an Omarchy/Quickshell dialog instead of silently falling back to default.

@@ -10,7 +10,7 @@ Python functions/CLI). No payload used in testing ever executed — every
 probe was inert data whose only purpose was to observe how it was parsed
 and where it landed as an argument.
 
-A prior review, `codex-review.md`, is present in the repo and already
+A prior review, `docs/codex-review.md`, is present in the repo and already
 covers (and this review re-verifies as fixed) three earlier issues: the
 missing `--` before `node -e`'s URL argument, the missing `--` before the
 fallback/launch `exec` calls, and browser-order-based (rather than
@@ -58,7 +58,7 @@ send that link to a victim.
 `bin/browser-router` passes `$host` straight into `browser-router-config`'s
 `argparse`-based CLI with no `--` end-of-options marker — the exact bug
 class already fixed for the `node -e` and browser-`exec` call sites
-(`codex-review.md`), but missed here. `argparse` registers `-h`/`--help`
+(`docs/codex-review.md`), but missed here. `argparse` registers `-h`/`--help`
 on every subcommand. Confirmed by direct testing:
 
 ```
@@ -145,7 +145,7 @@ Also worth a regression test asserting `browser-router-config resolve --
 argparse output — this is exactly the kind of thing that silently
 regresses if someone "simplifies" the invocation later.
 
-## Verified fixed (from `codex-review.md`)
+## Verified fixed (from `docs/codex-review.md`)
 
 Re-tested against the current code; all hold:
 
