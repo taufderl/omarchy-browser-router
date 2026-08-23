@@ -21,16 +21,45 @@ except ImportError:
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "browser-router" / "config.yaml"
 
-# Known browser ids, for now. Extending this to a new browser just means
-# adding an entry here and to BROWSER_BINARIES.
-BROWSER_IDS = ["google-chrome", "chromium", "brave", "firefox"]
+# Same identifiers, same order, as `omarchy default browser --help`. Kept in
+# sync with omarchy-default-browser's desktop-id mapping below rather than
+# hardcoding binary names: extending this to a new browser is one entry here.
+BROWSER_IDS = ["chromium", "chrome", "brave", "brave-origin", "edge", "firefox", "zen"]
 
-BROWSER_BINARIES = {
-    "google-chrome": "google-chrome-stable",
-    "chromium": "chromium",
-    "brave": "brave",
-    "firefox": "firefox",
+BROWSER_DESKTOP_IDS = {
+    "chromium": "chromium.desktop",
+    "chrome": "google-chrome.desktop",
+    "brave": "brave-browser.desktop",
+    "brave-origin": "brave-origin.desktop",
+    "edge": "microsoft-edge.desktop",
+    "firefox": "firefox.desktop",
+    "zen": "zen.desktop",
 }
+
+# Same search order omarchy-launch-browser uses.
+APPLICATION_DIRS = [
+    Path.home() / ".local/share/applications",
+    Path.home() / ".nix-profile/share/applications",
+    Path("/usr/share/applications"),
+]
+
+
+def resolve_binary(browser_id: str) -> str | None:
+    """The executable a browser id's installed .desktop file points at, or
+    None if that browser isn't installed. Reads the Exec= line the same way
+    omarchy-launch-browser does, rather than guessing binary names -- AUR
+    packaging doesn't always name the binary after the package."""
+    desktop_id = BROWSER_DESKTOP_IDS[browser_id]
+    for directory in APPLICATION_DIRS:
+        path = directory / desktop_id
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines():
+            if line.startswith("Exec="):
+                exec_line = line[len("Exec=") :].strip()
+                if exec_line:
+                    return exec_line.split()[0]
+    return None
 
 # A conservative hostname label pattern: lets through normal domains,
 # rejects anything that looks like it carries a scheme, path, userinfo,
@@ -117,19 +146,18 @@ def load_validated(path: Path) -> dict:
 
 
 def resolve(data: dict, host: str) -> str:
-    """Return the binary name to launch for `host` (empty host -> default)."""
-    default_binary = BROWSER_BINARIES[data["default"]]
+    """Return the browser id to use for `host` (empty host -> default)."""
     if not host:
-        return default_binary
+        return data["default"]
 
     host = host.lower()
     for browser in BROWSER_IDS:
         for domain in data.get(browser, []):
             domain = domain.lower()
             if host == domain or host.endswith("." + domain):
-                return BROWSER_BINARIES[browser]
+                return browser
 
-    return default_binary
+    return data["default"]
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -149,14 +177,15 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     print(f"OK: {path} is valid")
 
-    import shutil
-
     referenced = {data["default"]}
     referenced.update(b for b in BROWSER_IDS if data.get(b))
     for browser in sorted(referenced):
-        binary = BROWSER_BINARIES[browser]
-        if shutil.which(binary) is None:
-            print(f"warning: '{browser}' is configured but '{binary}' isn't on PATH", file=sys.stderr)
+        if resolve_binary(browser) is None:
+            print(
+                f"warning: '{browser}' is configured but not installed "
+                f"(no {BROWSER_DESKTOP_IDS[browser]} found)",
+                file=sys.stderr,
+            )
 
     return 0
 
@@ -223,7 +252,16 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         print(str(e), file=sys.stderr)
         return 1
 
-    print(resolve(data, args.host))
+    browser = resolve(data, args.host)
+    binary = resolve_binary(browser)
+    if binary is None:
+        print(
+            f"'{browser}' is not installed (no {BROWSER_DESKTOP_IDS[browser]} found)",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(binary)
     return 0
 
 

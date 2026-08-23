@@ -31,10 +31,6 @@ else
   echo "Warning: 'python3' not found on PATH. It's required for config validation and routing; without it every link fails closed to brave." >&2
 fi
 
-for browser in google-chrome-stable chromium brave firefox; do
-  command -v "$browser" >/dev/null || echo "Note: '$browser' not found on PATH. That's fine unless your config routes domains to it." >&2
-done
-
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$CONFIG_DIR"
 
 install -m 755 "$SCRIPT_DIR/bin/browser-router" "$BIN_DEST"

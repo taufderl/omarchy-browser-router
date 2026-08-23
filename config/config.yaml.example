@@ -8,16 +8,23 @@
 # its subdomains (e.g. "google.com" covers "accounts.google.com"). A
 # domain may only appear under one browser.
 #
-# Known browser ids (for now): google-chrome, chromium, brave, firefox.
+# Browser ids match `omarchy default browser --help`:
+# chromium, chrome, brave, brave-origin, edge, firefox, zen.
 #
 # Edit this by hand, or use: browser-router-config add <browser> <domain>
 
 default: brave
 
-google-chrome: []
-
 chromium: []
+
+chrome: []
 
 brave: []
 
+brave-origin: []
+
+edge: []
+
 firefox: []
+
+zen: []

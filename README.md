@@ -1,8 +1,8 @@
 # omarchy-browser-router
 
 Routes links to whichever browser their domain is configured for, on
-Omarchy/Hyprland. Supports google-chrome, chromium, brave, and firefox (for
-now -- adding another browser is a two-line change).
+Omarchy/Hyprland. Supports the same browsers as `omarchy default browser
+--help`: chromium, chrome, brave, brave-origin, edge, firefox, zen.
 
 ## How it works
 
@@ -51,7 +51,7 @@ saved previous-default record on a reinstall.
 ```yaml
 default: brave
 
-google-chrome:
+chrome:
   - google.com
   - work-sso.example.com
 
@@ -60,7 +60,13 @@ chromium:
 
 brave: []
 
+brave-origin: []
+
+edge: []
+
 firefox: []
+
+zen: []
 ```
 
 - `default` is required and must name one of the known browsers -- used
@@ -75,8 +81,8 @@ Edit the file directly, or use the helper:
 ```sh
 browser-router-config              # usage
 browser-router-config check        # validate the config, warn about
-                                    # configured browsers missing from PATH
-browser-router-config add google-chrome google.com
+                                    # configured browsers that aren't installed
+browser-router-config add chrome google.com
 ```
 
 `add` refuses domains that don't look like a plain hostname (no scheme,
@@ -109,8 +115,11 @@ remove that too:
 - `node`, for spec-compliant URL parsing
 - `python3` with PyYAML (Arch/Omarchy package: `python-yaml`), for config
   parsing and routing
-- Whichever of `google-chrome-stable`, `chromium`, `brave`, `firefox` your
-  config actually routes to
+- Whichever browsers your config actually routes to, installed the way
+  `omarchy install browser <name>` installs them (a `.desktop` file is all
+  that's required -- the actual binary is resolved from its `Exec=` line,
+  the same way `omarchy-launch-browser` does, rather than a hardcoded
+  binary name per browser)
 
 Missing `node` or `python3`/PyYAML doesn't break anything -- every link
 just fails closed to `brave` (see above), and `install.sh` warns about it.
@@ -127,6 +136,17 @@ parsing and config parsing out of shell entirely and into an actual parser
 for each (`node`'s `URL`, Python's PyYAML). `bin/browser-router` is now
 just glue: extract a hostname, ask `browser-router-config resolve` what to
 do with it, exec the answer.
+
+Browser ids resolve to an actual executable by reading the `Exec=` line of
+that browser's installed `.desktop` file (`chromium.desktop`,
+`google-chrome.desktop`, etc. -- the same ids `omarchy-default-browser`
+uses), rather than a hardcoded id -> binary-name table. AUR packaging doesn't
+reliably name the binary after the package, and guessing wrong for a
+browser this machine doesn't have installed (brave-origin, edge, and zen
+weren't available to check against directly) is exactly the kind of thing
+that should be looked up, not assumed. `omarchy-launch-browser` already
+solves this the same way -- reusing its approach means one less thing to
+keep in sync with Omarchy's own browser installer.
 
 ## Limitations
 
