@@ -146,18 +146,47 @@ def load_validated(path: Path) -> dict:
 
 
 def resolve(data: dict, host: str) -> str:
-    """Return the browser id to use for `host` (empty host -> default)."""
+    """Return the browser id to use for `host` (empty host -> default).
+
+    Ties are broken by the longest (most specific) matching domain, not by
+    BROWSER_IDS order -- see codex-review.md. Browser routing is meant as an
+    isolation boundary: a broad rule in a browser that happens to come first
+    in BROWSER_IDS must not silently win over a more specific rule for a
+    subdomain routed to a different browser.
+    """
     if not host:
         return data["default"]
 
     host = host.lower()
+    best_domain = None
+    best_browser = None
     for browser in BROWSER_IDS:
         for domain in data.get(browser, []):
             domain = domain.lower()
             if host == domain or host.endswith("." + domain):
-                return browser
+                if best_domain is None or len(domain) > len(best_domain):
+                    best_domain = domain
+                    best_browser = browser
 
-    return data["default"]
+    return best_browser if best_browser is not None else data["default"]
+
+
+def find_overlaps(data: dict) -> list[tuple[str, str, str, str]]:
+    """Cross-browser parent/child domain pairs, as (parent, parent_browser,
+    child, child_browser). Not an invalid config -- resolve() already picks
+    the child, being more specific -- but worth surfacing in `check` so the
+    precedence isn't a silent surprise."""
+    entries = [
+        (domain.lower(), browser)
+        for browser in BROWSER_IDS
+        for domain in data.get(browser, [])
+    ]
+    return [
+        (parent, parent_browser, child, child_browser)
+        for parent, parent_browser in entries
+        for child, child_browser in entries
+        if parent_browser != child_browser and child.endswith("." + parent)
+    ]
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -176,6 +205,13 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     print(f"OK: {path} is valid")
+
+    for parent, parent_browser, child, child_browser in find_overlaps(data):
+        print(
+            f"note: '{child}' ({child_browser}) is more specific than "
+            f"'{parent}' ({parent_browser}) and takes precedence for it",
+            file=sys.stderr,
+        )
 
     referenced = {data["default"]}
     referenced.update(b for b in BROWSER_IDS if data.get(b))

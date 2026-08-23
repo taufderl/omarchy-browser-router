@@ -75,6 +75,10 @@ zen: []
 - Listing a domain also covers its subdomains: `google.com` covers
   `accounts.google.com`.
 - A domain may only be listed under one browser.
+- A more specific domain always wins over a broader one in a different
+  browser, regardless of which is declared first: `login.example.com` in
+  `brave` takes precedence over `example.com` in `chrome`. `check` calls
+  out any such overlap so it's never a silent surprise.
 
 Edit the file directly, or use the helper:
 
