@@ -1,148 +1,164 @@
-#!/bin/bash
-# Opens the given URL in whichever browser its domain is routed to by
-# ~/.config/browser-router/config.yaml. Registered as the default web
-# browser via share/applications/browser-router.desktop (see install.sh).
-#
-# This script only orchestrates; it does not parse URLs or the config
-# itself. Hostname extraction uses Node's WHATWG URL parser (the standard
-# Chromium implements) rather than shell string manipulation -- ad-hoc
-# shell parsing disagreed with Chromium on backslashes in the authority
-# component and let a crafted link bypass routing (see docs/codex-review.md).
-# Domain -> browser matching and config validation live in
-# browser-router-config (Python + PyYAML), for the same reason: don't
-# reimplement a structured-data parser in Bash.
-#
-# Any failure along the way -- missing node/python3, an unreadable or
-# invalid config, a URL that won't parse -- falls back to launching brave
-# directly, so a config mistake can never silently open a link in some
-# other configured browser.
-#
-# Every exec of node or a browser puts `--` before the untrusted URL. Without
-# it, a URL argument starting with "-" is parsed as a CLI option of whatever
-# it's handed to -- some Node options evaluate JavaScript, making that a
-# local code-execution path, and a browser could just as well interpret it
-# as one of its own flags. See docs/codex-review.md.
-#
-# Ask mode (config: default: ask): a domain with no explicit route pops up
-# an Omarchy/Quickshell dialog instead of silently falling back to default.
-# That popup can't answer synchronously (QML can't block on a click), so
-# this reuses the done-file poll pattern Omarchy's own image picker already
-# uses for the same problem (see omarchy-menu-images). Every failure in that
-# path -- shell unreachable, popup busy, timeout, cancel -- falls through to
-# the same fallback as everything else, so ask mode can only ever add a
-# prompt, never weaken the fail-closed behavior above.
-#
-# -h/--help are handled before any of that and never open a browser at all.
-# This script is registered as the system default browser's Exec target, so
-# other tooling that probes "the default browser" the way a real browser
-# binary behaves invokes it directly: omarchy-launch-browser runs
-# `$browser_exec --help` to sniff Firefox-vs-Chromium flag names before its
-# real launch. Every other argument here is data (a URL to route, or an
-# invalid one to fail closed on) -- these two are the one case that must
-# act like a CLI flag instead, matching what a real browser binary does for
-# --help (print usage, exit, no window). Without this, that probe hits the
-# same "not a valid URL" fallback as any other unparseable input and pops a
-# real, visible browser window navigated to the literal text "--help".
+#!/usr/bin/env python3
+"""Opens a URL in whichever browser its domain is routed to, per
+~/.config/browser-router/config.yaml. Registered as the default web
+browser (share/applications/browser-router.desktop).
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-CONFIG_TOOL="$SCRIPT_DIR/browser-router-config"
-ASK_TIMEOUT_SECONDS="${ASK_TIMEOUT_SECONDS:-30}"
+Imports browser-router-config directly rather than shelling out to it, so
+there's no subprocess/argv boundary between our own two components -- the
+one that remains is the final exec of a real browser, which always gets
+`--` before the URL (a leading "-" would otherwise be parsed as that
+program's own flag; see docs/codex-review.md).
 
-url="$1"
+Any failure -- unparseable URL, missing/invalid config, ask mode
+unavailable -- falls back to launching brave directly.
 
-if [[ $url == "-h" || $url == "--help" ]]; then
-  cat <<'EOF'
-browser-router: opens a URL in whichever browser its domain is routed to
+-h/--help print usage and exit before anything else touches the URL:
+other Omarchy tooling that treats the registered default browser like a
+real browser binary probes it with --help (omarchy-launch-browser, to
+detect Firefox-vs-Chromium flag names -- see TODO.md for why this exists
+at all). Without this, that probe would fail URL parsing like any other
+non-URL input and pop a real browser window navigated to the literal
+text "--help".
+"""
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+FALLBACK_BROWSER = "brave"
+ASK_TIMEOUT_SECONDS = float(os.environ.get("ASK_TIMEOUT_SECONDS", 30))
+
+USAGE = """browser-router: opens a URL in whichever browser its domain is routed to
 by ~/.config/browser-router/config.yaml (see browser-router-config).
 
-Usage: browser-router [URL]
-EOF
-  exit 0
-fi
+Usage: browser-router [URL]"""
 
-fallback() { exec brave -- "$@"; }
 
-[[ -x $CONFIG_TOOL ]] || fallback "$url"
+def fallback(url: str | None = None) -> None:
+    argv = [FALLBACK_BROWSER, "--"] + ([url] if url else [])
+    os.execvp(FALLBACK_BROWSER, argv)
 
-# JSON-string-escape a value via python3 (already a hard dependency, and
-# plain string escaping has no WHATWG-style correctness trap the way URL
-# parsing does -- no reason to reach for node here).
-json_str() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
 
-ask_and_resolve() {
-  local host=$1
-  local browsers_json selection_file done_file deadline choice remember binary open_result busy
+def load_config_module():
+    # browser-router-config has no .py suffix (it's a CLI command name), so
+    # spec_from_file_location can't infer a loader for it -- give it one.
+    path = str(SCRIPT_DIR / "browser-router-config")
+    loader = importlib.machinery.SourceFileLoader("browser_router_config", path)
+    spec = importlib.util.spec_from_file_location("browser_router_config", path, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
-  browsers_json="$("$CONFIG_TOOL" installed 2>/dev/null)" || return 1
-  [[ -z $browsers_json || $browsers_json == "[]" ]] && return 1
 
-  busy="$(omarchy-shell shell call browser-router.ask isBusy "" 2>/dev/null)" || return 1
-  [[ $busy == "true" ]] && return 1
+def shell_call(*args: str) -> subprocess.CompletedProcess:
+    """omarchy-shell shell call/summon, argv-list (no shell involved --
+    nothing here needs shell quoting)."""
+    return subprocess.run(["omarchy-shell", *args], capture_output=True, text=True)
 
-  selection_file=$(mktemp)
-  done_file=$(mktemp)
-  rm -f "$done_file"
-  trap 'rm -f "$selection_file" "$done_file"' RETURN
 
-  local payload
-  payload=$(printf '{"host":%s,"browsers":%s,"selectionFile":%s,"doneFile":%s}' \
-    "$(json_str "$host")" "$browsers_json" "$(json_str "$selection_file")" "$(json_str "$done_file")")
+def ask_and_resolve(brc, data: dict, host: str) -> str | None:
+    """Summon the ask-mode popup and wait for an answer; None on any
+    failure (busy, no shell, timeout, cancel) so the caller falls back the
+    same as any other failure -- ask mode only ever adds a prompt, never
+    weakens the fail-closed behavior. Mirrors Omarchy's own image-picker
+    pattern for a script needing an answer from a Quickshell popup it
+    can't block on: write the answer to a file, touch a second file to
+    signal done, poll for that (see omarchy-menu-images)."""
+    installed = [b for b in brc.BROWSER_IDS if brc.resolve_binary(b) is not None]
+    if not installed:
+        return None
 
-  open_result="$(omarchy-shell shell summon browser-router.ask "$payload" 2>/dev/null)" || return 1
-  [[ $open_result != "ok" ]] && return 1
+    busy = shell_call("shell", "call", "browser-router.ask", "isBusy", "")
+    if busy.returncode != 0 or busy.stdout.strip() == "true":
+        return None
 
-  deadline=$((SECONDS + ASK_TIMEOUT_SECONDS))
-  while [[ ! -e $done_file && $SECONDS -lt $deadline ]]; do
-    sleep 0.05
-  done
-  if [[ ! -e $done_file ]]; then
-    omarchy-shell shell call browser-router.ask cancelAsk "" >/dev/null 2>&1 || true
-    return 1
-  fi
+    selection_file = tempfile.mktemp()
+    done_file = tempfile.mktemp()
+    try:
+        payload = json.dumps({
+            "host": host,
+            "browsers": [{"id": b, "label": brc.BROWSER_LABELS[b]} for b in installed],
+            "selectionFile": selection_file,
+            "doneFile": done_file,
+        })
+        summon = shell_call("shell", "summon", "browser-router.ask", payload)
+        if summon.returncode != 0 or summon.stdout.strip() != "ok":
+            return None
 
-  [[ -s $selection_file ]] || return 1
+        deadline = time.monotonic() + ASK_TIMEOUT_SECONDS
+        while not os.path.exists(done_file) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not os.path.exists(done_file):
+            shell_call("shell", "call", "browser-router.ask", "cancelAsk", "")
+            return None
 
-  choice="$(sed -n '1p' "$selection_file")"
-  remember="$(sed -n '2p' "$selection_file")"
-  [[ -z $choice ]] && return 1
+        lines = Path(selection_file).read_text().splitlines() if os.path.exists(selection_file) else []
+        choice = lines[0] if lines else ""
+        remember = lines[1] if len(lines) > 1 else ""
+        if not choice:
+            return None
 
-  if [[ $remember == "remember" ]]; then
-    "$CONFIG_TOOL" add "$choice" -- "$host" >/dev/null 2>&1
-  fi
+        if remember == "remember":
+            if brc.add_domain(data, choice, host) == "added":
+                brc.write_config(brc.DEFAULT_CONFIG_PATH, data)
 
-  binary="$("$CONFIG_TOOL" binary -- "$choice" 2>/dev/null)" || return 1
-  [[ -z $binary ]] && return 1
-  printf '%s' "$binary"
-}
+        return brc.resolve_binary(choice)
+    finally:
+        Path(selection_file).unlink(missing_ok=True)
+        Path(done_file).unlink(missing_ok=True)
 
-if [[ -z $url ]]; then
-  binary="$("$CONFIG_TOOL" resolve -- "" 2>/dev/null)" || fallback
-  [[ -z $binary ]] && fallback
-  exec "$binary"
-fi
 
-command -v node >/dev/null || fallback "$url"
+def main() -> None:
+    url = sys.argv[1] if len(sys.argv) > 1 else ""
 
-host="$(node -e '
-  try {
-    const u = new URL(process.argv[1]);
-    if (u.protocol !== "http:" && u.protocol !== "https:") process.exit(1);
-    process.stdout.write(u.hostname.toLowerCase());
-  } catch {
-    process.exit(1);
-  }
-' -- "$url")" || fallback "$url"
+    if url in ("-h", "--help"):
+        print(USAGE)
+        return
 
-[[ -z $host ]] && fallback "$url"
+    try:
+        brc = load_config_module()
+    except Exception:
+        fallback(url)
 
-binary="$("$CONFIG_TOOL" resolve -- "$host" 2>/dev/null)"; rc=$?
-if (( rc == 0 )); then
-  [[ -z $binary ]] && fallback "$url"
-elif (( rc == 3 )); then
-  binary="$(ask_and_resolve "$host")" || fallback "$url"
-  [[ -z $binary ]] && fallback "$url"
-else
-  fallback "$url"
-fi
+    if not url:
+        try:
+            data = brc.load_validated(brc.DEFAULT_CONFIG_PATH)
+            binary = brc.resolve_binary(brc.resolve(data, ""))
+        except Exception:
+            binary = None
+        if not binary:
+            fallback()
+        os.execvp(binary, [binary])
 
-exec "$binary" -- "$url"
+    host = brc.extract_host(url)
+    if not host:
+        fallback(url)
+
+    try:
+        data = brc.load_validated(brc.DEFAULT_CONFIG_PATH)
+    except Exception:
+        fallback(url)
+
+    if brc.should_ask(data, host):
+        try:
+            binary = ask_and_resolve(brc, data, host)
+        except Exception:
+            binary = None
+    else:
+        binary = brc.resolve_binary(brc.resolve(data, host))
+
+    if not binary:
+        fallback(url)
+
+    os.execvp(binary, [binary, "--", url])
+
+
+if __name__ == "__main__":
+    main()

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Browser Router
-Comment=Opens trusted domains in Chrome, everything else in Brave
+Comment=Opens links in whichever browser their domain is configured for
 Exec=browser-router %u
 Terminal=false
 Type=Application

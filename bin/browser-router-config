@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Validate, edit, and query browser-router's config.yaml.
+"""Validate, edit, and query browser-router's config.yaml. Also owns URL
+hostname extraction (extract_host) -- see its docstring for why.
 
-Config parsing and domain resolution live here in Python (with PyYAML)
-rather than being reimplemented in shell -- see docs/codex-review.md for why
-hand-rolled parsing of structured data is the wrong call for this tool.
-bin/browser-router shells out to this script's `resolve` subcommand for
-every link it opens; `check` and `add` are for interactive use.
+bin/browser-router imports this module directly and calls its functions;
+it does not shell out to this file's CLI. The CLI (check/add/default/
+installed/binary/resolve) is for interactive use and any external caller
+that wants a subprocess boundary instead.
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -21,21 +22,16 @@ except ImportError:
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "browser-router" / "config.yaml"
 
-# Same identifiers, same order, as `omarchy default browser --help`. Kept in
-# sync with omarchy-default-browser's desktop-id mapping below rather than
-# hardcoding binary names: extending this to a new browser is one entry here.
+# Same identifiers, same order, as `omarchy default browser --help`.
 BROWSER_IDS = ["chromium", "chrome", "brave", "brave-origin", "edge", "firefox", "zen"]
 
-# `default` accepts any real browser id, or the literal "ask" to turn on
-# ask mode (see resolve()/should_ask()) -- one value, one meaning, rather
-# than a browser id plus a separate on/off flag next to it.
+# `default` accepts a browser id, or "ask" to prompt instead of using a
+# fixed fallback.
 DEFAULT_VALUES = BROWSER_IDS + ["ask"]
 
-# What plain `resolve` (which can't ask -- it must always return a real,
-# synchronous answer) falls back to when default is "ask" and nothing
-# explicit matched. Same browser bin/browser-router's own hardcoded
-# last-resort fallback uses, so both layers agree once neither has a real
-# answer to give.
+# What resolve() falls back to when default is "ask" and should_ask() has
+# already said no (empty host, or a plain non-asking caller). Same browser
+# bin/browser-router's own last-resort exec falls back to.
 FALLBACK_BROWSER = "brave"
 
 BROWSER_DESKTOP_IDS = {
@@ -48,7 +44,7 @@ BROWSER_DESKTOP_IDS = {
     "zen": "zen.desktop",
 }
 
-# Display names for the ask-mode popup only -- routing itself never uses these.
+# Ask-mode popup display names only.
 BROWSER_LABELS = {
     "chromium": "Chromium",
     "chrome": "Chrome",
@@ -68,10 +64,9 @@ APPLICATION_DIRS = [
 
 
 def resolve_binary(browser_id: str) -> str | None:
-    """The executable a browser id's installed .desktop file points at, or
-    None if that browser isn't installed. Reads the Exec= line the same way
-    omarchy-launch-browser does, rather than guessing binary names -- AUR
-    packaging doesn't always name the binary after the package."""
+    """The executable a browser id's .desktop Exec= line points at, or None
+    if not installed. Looked up rather than guessed: AUR packaging doesn't
+    reliably name the binary after the package."""
     desktop_id = BROWSER_DESKTOP_IDS[browser_id]
     for directory in APPLICATION_DIRS:
         path = directory / desktop_id
@@ -84,16 +79,55 @@ def resolve_binary(browser_id: str) -> str | None:
                     return exec_line.split()[0]
     return None
 
-# A conservative hostname label pattern: lets through normal domains,
-# rejects anything that looks like it carries a scheme, path, userinfo,
-# or whitespace.
-_DOMAIN_RE = re.compile(
-    r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
-)
+
+_DOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
 
 
 def is_valid_domain(domain: str) -> bool:
     return bool(domain) and bool(_DOMAIN_RE.match(domain))
+
+
+_URL_RE = re.compile(r"^(https?)://([^/?#]*)([/?#].*)?$", re.IGNORECASE)
+
+
+def extract_host(url: str) -> str | None:
+    """Hostname from `url`, or None to fail closed.
+
+    Deliberately not a full URL parser. Real WHATWG URL parsing is needed
+    for correctness, not just convenience -- an earlier version of this
+    tool shelled out to Node's URL() for exactly that reason, after a
+    hand-rolled parser disagreed with Chromium on backslashes in the
+    authority and let a crafted link bypass routing (docs/codex-review.md).
+    Dropping Node meant finding a way to keep that guarantee without a
+    second language, and no Python stdlib or GLib parser is WHATWG-correct
+    either (both tested against that exact attack URL and got it wrong the
+    same way the original bug did -- see TODO.md).
+
+    The approach here sidesteps needing a correct parser at all: accept
+    only the subset of URLs where no parser could disagree in the first
+    place (plain ASCII scheme+host+port, no userinfo, no percent-encoding,
+    no backslashes, no IPv6 literals -- see the character checks below),
+    and fail closed for everything else. Verified this subset is a strict
+    match for real WHATWG parsing (not just internally consistent) by
+    cross-checking every accepted case against Node's URL() directly.
+    Rejecting more than strictly necessary costs nothing here: a link that
+    fails this falls back to the default browser exactly like a
+    genuinely-invalid URL would, it just doesn't get per-domain routing.
+    """
+    m = _URL_RE.match(url)
+    if not m:
+        return None
+    authority = m.group(2)
+    if not authority or not authority.isascii() or any(c in authority for c in "@\\%[]"):
+        return None
+    if ":" in authority:
+        host, _, port = authority.rpartition(":")
+        if not port.isdigit():
+            return None
+    else:
+        host = authority
+    host = host.lower()
+    return host if is_valid_domain(host) else None
 
 
 class ConfigError(Exception):
@@ -130,9 +164,7 @@ def validate(data: dict) -> list[str]:
     if "default" not in data:
         errors.append("missing required key 'default'")
     elif data["default"] not in DEFAULT_VALUES:
-        errors.append(
-            f"'default: {data['default']!r}' must be 'ask' or one of: {', '.join(BROWSER_IDS)}"
-        )
+        errors.append(f"'default: {data['default']!r}' must be 'ask' or one of: {', '.join(BROWSER_IDS)}")
 
     seen: dict[str, str] = {}
     for browser in BROWSER_IDS:
@@ -151,9 +183,7 @@ def validate(data: dict) -> list[str]:
                 if seen[domain] == browser:
                     errors.append(f"'{browser}' lists '{domain}' more than once")
                 else:
-                    errors.append(
-                        f"'{domain}' is listed under both '{seen[domain]}' and '{browser}'"
-                    )
+                    errors.append(f"'{domain}' is listed under both '{seen[domain]}' and '{browser}'")
             else:
                 seen[domain] = browser
 
@@ -169,34 +199,24 @@ def load_validated(path: Path) -> dict:
 
 
 def write_config(path: Path, data: dict) -> None:
-    """Write `data` back out in canonical form: `default`, then each
-    BROWSER_IDS key in order with its domains sorted and lowercased. Used
-    by every subcommand that edits the file, so the on-disk structure
-    stays the same regardless of which one last touched it."""
+    """Canonical form: `default`, then each BROWSER_IDS key in order with
+    sorted lowercased domains. Same output regardless of which subcommand
+    last wrote it."""
     ordered = {"default": data["default"]}
     for b in BROWSER_IDS:
         ordered[b] = sorted(d.lower() for d in data.get(b, []))
-
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
         yaml.safe_dump(ordered, f, default_flow_style=False, sort_keys=False)
 
 
 def resolve_explicit(data: dict, host: str) -> str | None:
-    """Return the browser id explicitly routed for `host`, or None if
-    nothing matches (distinct from `resolve()`, which falls back to
-    `default` -- ask mode needs to tell "no route" apart from "routed to
-    whatever the default happens to be").
-
-    Ties are broken by the longest (most specific) matching domain, not by
-    BROWSER_IDS order -- see docs/codex-review.md. Browser routing is meant as an
-    isolation boundary: a broad rule in a browser that happens to come first
-    in BROWSER_IDS must not silently win over a more specific rule for a
-    subdomain routed to a different browser.
-    """
+    """Browser id explicitly routed for `host`, or None if nothing
+    matches. Ties broken by longest (most specific) matching domain, not
+    BROWSER_IDS order -- a broad rule must not silently beat a more
+    specific rule for a subdomain routed elsewhere (docs/codex-review.md)."""
     if not host:
         return None
-
     host = host.lower()
     best_domain = None
     best_browser = None
@@ -207,16 +227,11 @@ def resolve_explicit(data: dict, host: str) -> str | None:
                 if best_domain is None or len(domain) > len(best_domain):
                     best_domain = domain
                     best_browser = browser
-
     return best_browser
 
 
 def resolve(data: dict, host: str) -> str:
-    """Return a browser id for `host` (empty host, or no explicit route,
-    -> default -- or FALLBACK_BROWSER if default is "ask"). Always a real
-    id, never the literal "ask": this is the synchronous half of
-    resolution, used once should_ask() (see cmd_resolve) has already said
-    no prompt is needed."""
+    """Browser id for `host` -- always a real id, never "ask" itself."""
     default = data["default"]
     fallback = default if default != "ask" else FALLBACK_BROWSER
     if not host:
@@ -226,29 +241,22 @@ def resolve(data: dict, host: str) -> str:
 
 
 def should_ask(data: dict, host: str) -> bool:
-    """True when ask mode should prompt for `host`: default is "ask", there's
-    an actual hostname, and it has no explicit route. Never true for the
-    empty-host/no-URL case or for a host that already resolves somewhere
-    explicit -- ask mode only replaces the silent "fall back to default"
-    branch, nothing else."""
+    """True only when default is "ask", host is non-empty, and it has no
+    explicit route -- never for the empty-host case or an already-routed
+    host."""
     return data.get("default") == "ask" and bool(host) and resolve_explicit(data, host) is None
 
 
 def find_overlaps(data: dict) -> list[tuple[str, str, str, str]]:
-    """Cross-browser parent/child domain pairs, as (parent, parent_browser,
-    child, child_browser). Not an invalid config -- resolve() already picks
-    the child, being more specific -- but worth surfacing in `check` so the
-    precedence isn't a silent surprise."""
-    entries = [
-        (domain.lower(), browser)
-        for browser in BROWSER_IDS
-        for domain in data.get(browser, [])
-    ]
+    """Cross-browser parent/child domain pairs, (parent, parent_browser,
+    child, child_browser). Not invalid -- resolve() already picks the
+    child -- but worth surfacing in `check`."""
+    entries = [(d.lower(), b) for b in BROWSER_IDS for d in data.get(b, [])]
     return [
-        (parent, parent_browser, child, child_browser)
-        for parent, parent_browser in entries
-        for child, child_browser in entries
-        if parent_browser != child_browser and child.endswith("." + parent)
+        (parent, pb, child, cb)
+        for parent, pb in entries
+        for child, cb in entries
+        if pb != cb and child.endswith("." + parent)
     ]
 
 
@@ -268,41 +276,41 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     print(f"OK: {path} is valid")
-
     print(f"default: {data['default']}")
     for browser in BROWSER_IDS:
         count = len(data.get(browser, []))
         if count:
             print(f"{browser}: {count} domain{'s' if count != 1 else ''}")
 
-    for parent, parent_browser, child, child_browser in find_overlaps(data):
-        print(
-            f"note: '{child}' ({child_browser}) is more specific than "
-            f"'{parent}' ({parent_browser}) and takes precedence for it",
-            file=sys.stderr,
-        )
+    for parent, pb, child, cb in find_overlaps(data):
+        print(f"note: '{child}' ({cb}) is more specific than '{parent}' ({pb}) and takes precedence for it", file=sys.stderr)
 
     referenced = set() if data["default"] == "ask" else {data["default"]}
     referenced.update(b for b in BROWSER_IDS if data.get(b))
     for browser in sorted(referenced):
         if resolve_binary(browser) is None:
-            print(
-                f"warning: '{browser}' is configured but not installed "
-                f"(no {BROWSER_DESKTOP_IDS[browser]} found)",
-                file=sys.stderr,
-            )
+            print(f"warning: '{browser}' is configured but not installed (no {BROWSER_DESKTOP_IDS[browser]} found)", file=sys.stderr)
 
     return 0
 
 
+def add_domain(data: dict, browser: str, domain: str) -> str:
+    """Add `domain` -> `browser` to `data` in place (`domain` must already
+    be is_valid_domain). Returns "added", "unchanged" (already routed to
+    `browser`), or the conflicting browser's id (already routed elsewhere,
+    data left untouched). Caller writes the config back only on "added"."""
+    for other in BROWSER_IDS:
+        if other != browser and domain in [d.lower() for d in data.get(other, [])]:
+            return other
+    if domain in [d.lower() for d in data.get(browser, [])]:
+        return "unchanged"
+    data.setdefault(browser, []).append(domain)
+    return "added"
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     path = Path(args.config)
-    browser = args.browser
     domain = args.domain.strip().lower()
-
-    if browser not in BROWSER_IDS:
-        print(f"error: unknown browser '{browser}' (expected one of: {', '.join(BROWSER_IDS)})", file=sys.stderr)
-        return 2
 
     if not is_valid_domain(domain):
         print(f"error: '{args.domain}' doesn't look like a plain domain (no scheme, path, or @)", file=sys.stderr)
@@ -314,33 +322,16 @@ def cmd_add(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    for other in BROWSER_IDS:
-        if other == browser:
-            continue
-        if domain in [d.lower() for d in data.get(other, [])]:
-            print(f"error: '{domain}' is already routed to '{other}'; remove it there first", file=sys.stderr)
-            return 1
-
-    existing = [d.lower() for d in data.get(browser, [])]
-    if domain in existing:
-        print(f"'{domain}' is already routed to '{browser}'")
+    result = add_domain(data, args.browser, domain)
+    if result == "added":
+        write_config(path, data)
+        print(f"Added '{domain}' -> '{args.browser}'")
         return 0
-
-    data.setdefault(browser, []).append(domain)
-
-    errors = validate(data)
-    if errors:
-        # Shouldn't happen given the checks above, but don't write a config
-        # we wouldn't accept ourselves.
-        print("error: refusing to write an invalid config:", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
-        return 1
-
-    write_config(path, data)
-
-    print(f"Added '{domain}' -> '{browser}'")
-    return 0
+    if result == "unchanged":
+        print(f"'{domain}' is already routed to '{args.browser}'")
+        return 0
+    print(f"error: '{domain}' is already routed to '{result}'; remove it there first", file=sys.stderr)
+    return 1
 
 
 def cmd_default(args: argparse.Namespace) -> int:
@@ -355,37 +346,19 @@ def cmd_default(args: argparse.Namespace) -> int:
         print(data["default"])
         return 0
 
-    old = data["default"]
-    new = args.browser
+    old, new = data["default"], args.browser
     if new == old:
         print(f"default is already '{old}'")
         return 0
 
     data["default"] = new
-
-    errors = validate(data)
-    if errors:
-        # Shouldn't happen -- new is one of BROWSER_IDS by argparse choices --
-        # but don't write a config we wouldn't accept ourselves.
-        print("error: refusing to write an invalid config:", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
-        return 1
-
     write_config(path, data)
-
     print(f"Set default: {old} -> {new}")
     return 0
 
 
 def cmd_installed(args: argparse.Namespace) -> int:
-    import json
-
-    installed = [
-        {"id": b, "label": BROWSER_LABELS[b]}
-        for b in BROWSER_IDS
-        if resolve_binary(b) is not None
-    ]
+    installed = [{"id": b, "label": BROWSER_LABELS[b]} for b in BROWSER_IDS if resolve_binary(b) is not None]
     print(json.dumps(installed))
     return 0
 
@@ -393,25 +366,15 @@ def cmd_installed(args: argparse.Namespace) -> int:
 def cmd_binary(args: argparse.Namespace) -> int:
     binary = resolve_binary(args.browser)
     if binary is None:
-        print(
-            f"'{args.browser}' is not installed (no {BROWSER_DESKTOP_IDS[args.browser]} found)",
-            file=sys.stderr,
-        )
+        print(f"'{args.browser}' is not installed (no {BROWSER_DESKTOP_IDS[args.browser]} found)", file=sys.stderr)
         return 1
     print(binary)
     return 0
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
-    """Print the binary to launch for a hostname and exit 0, or -- when
-    `default: ask` and this hostname has no explicit route -- print nothing
-    and exit 3 to signal the caller should prompt instead. One command, one
-    contract: a caller that doesn't handle exit 3 specially still gets
-    correct fail-closed behavior (empty stdout), it just won't offer to
-    ask. There is deliberately no separate "never signals ask" variant --
-    it existed briefly and was confusing (asking to resolve a domain while
-    silently hiding that this exact call would have prompted a real user
-    is worse than just telling the truth via the exit code)."""
+    """Print the binary for a hostname (exit 0), or -- when default: ask
+    should prompt for it -- print nothing and exit 3."""
     path = Path(args.config)
     try:
         data = load_validated(path)
@@ -425,80 +388,42 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     browser = resolve(data, args.host)
     binary = resolve_binary(browser)
     if binary is None:
-        print(
-            f"'{browser}' is not installed (no {BROWSER_DESKTOP_IDS[browser]} found)",
-            file=sys.stderr,
-        )
+        print(f"'{browser}' is not installed (no {BROWSER_DESKTOP_IDS[browser]} found)", file=sys.stderr)
         return 1
-
     print(binary)
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # --config lives on each subcommand's own parser (via this shared
-    # parent), not on the top-level parser too: argparse subparsers each
-    # apply their own argument defaults to the namespace when invoked, so
-    # defining --config in both places lets the subparser's default silently
-    # clobber a value the top-level parser already set from the command
-    # line. Only supporting `browser-router-config check --config X` (flag
-    # after the subcommand), not before, sidesteps that entirely.
+    # --config lives on each subparser (not the top-level parser too):
+    # defining it in both places lets the subparser's own default silently
+    # clobber a value already parsed from the command line, so only
+    # `check --config X` (after the subcommand) is supported.
     config_option = argparse.ArgumentParser(add_help=False)
-    config_option.add_argument(
-        "--config",
-        default=str(DEFAULT_CONFIG_PATH),
-        help=f"path to config.yaml (default: {DEFAULT_CONFIG_PATH})",
-    )
+    config_option.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="path to config.yaml")
 
-    parser = argparse.ArgumentParser(
-        prog="browser-router-config",
-        description="Validate, edit, and query browser-router's config.yaml.",
-    )
+    parser = argparse.ArgumentParser(prog="browser-router-config", description="Validate, edit, and query browser-router's config.yaml.")
     sub = parser.add_subparsers(dest="command")
 
-    p_check = sub.add_parser("check", help="validate the config file", parents=[config_option])
-    p_check.set_defaults(func=cmd_check)
+    sub.add_parser("check", help="validate the config file", parents=[config_option]).set_defaults(func=cmd_check)
 
     p_add = sub.add_parser("add", help="add a domain -> browser route", parents=[config_option])
-    p_add.add_argument("browser", choices=BROWSER_IDS, help="browser id")
-    p_add.add_argument("domain", help="domain to route to that browser")
+    p_add.add_argument("browser", choices=BROWSER_IDS)
+    p_add.add_argument("domain")
     p_add.set_defaults(func=cmd_add)
 
-    p_default = sub.add_parser(
-        "default",
-        help="print the default browser, or set it (or 'ask', to turn on ask mode) if given one",
-        parents=[config_option],
-    )
-    p_default.add_argument(
-        "browser",
-        nargs="?",
-        default=None,
-        choices=DEFAULT_VALUES,
-        help="browser id to set as default, or 'ask' to prompt instead",
-    )
+    p_default = sub.add_parser("default", help="print the default, or set it (or 'ask')", parents=[config_option])
+    p_default.add_argument("browser", nargs="?", default=None, choices=DEFAULT_VALUES)
     p_default.set_defaults(func=cmd_default)
 
-    p_installed = sub.add_parser(
-        "installed",
-        help="print installed browsers as JSON (used internally by browser-router's ask mode)",
-    )
-    p_installed.set_defaults(func=cmd_installed)
+    sub.add_parser("installed", help="print installed browsers as JSON").set_defaults(func=cmd_installed)
 
-    p_binary = sub.add_parser(
-        "binary",
-        help="print the executable for a browser id, without touching config.yaml "
-        "(used internally by browser-router's ask mode)",
-    )
-    p_binary.add_argument("browser", choices=BROWSER_IDS, help="browser id")
+    p_binary = sub.add_parser("binary", help="print the executable for a browser id")
+    p_binary.add_argument("browser", choices=BROWSER_IDS)
     p_binary.set_defaults(func=cmd_binary)
 
-    p_resolve = sub.add_parser(
-        "resolve",
-        help="print the binary to launch for a hostname, or exit 3 if default: ask should "
-        "prompt instead (used internally by browser-router)",
-        parents=[config_option],
-    )
-    p_resolve.add_argument("host", help="hostname to resolve, or an empty string for the default")
+    p_resolve = sub.add_parser("resolve", help="print the binary for a hostname, or exit 3 to ask", parents=[config_option])
+    p_resolve.add_argument("host", help="hostname, or an empty string for the default")
     p_resolve.set_defaults(func=cmd_resolve)
 
     return parser
@@ -507,11 +432,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-
     if not getattr(args, "command", None):
         parser.print_help()
         return 0
-
     return args.func(args)
 
 

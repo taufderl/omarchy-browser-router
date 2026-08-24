@@ -27,8 +27,6 @@ for cmd in xdg-mime update-desktop-database; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd" >&2; exit 1; }
 done
 
-command -v node >/dev/null || echo "Warning: 'node' not found on PATH. It's required for safe hostname parsing (see codlex-review.md) -- without it every link fails closed to brave." >&2
-
 if command -v python3 >/dev/null; then
   python3 -c "import yaml" 2>/dev/null || echo "Warning: PyYAML not found for python3 (Arch/Omarchy package: python-yaml). Without it, config validation and routing fail closed to brave." >&2
 else
