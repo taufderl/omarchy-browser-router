@@ -11,6 +11,7 @@ and any external caller that wants a subprocess boundary instead.
 import argparse
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -66,7 +67,18 @@ APPLICATION_DIRS = [
 def resolve_binary(browser_id: str) -> str | None:
     """The executable a browser id's .desktop Exec= line points at, or None
     if not installed. Looked up rather than guessed: AUR packaging doesn't
-    reliably name the binary after the package."""
+    reliably name the binary after the package.
+
+    The first whitespace-split Exec= token is resolved through
+    shutil.which() rather than handed back as-is: ~/.local/share/applications
+    is user-writable (same-user, not a new privilege boundary, but still
+    worth failing closed on) and the token wasn't otherwise checked to be
+    an absolute path or an existing executable before being os.execvp'd.
+    which() covers both a bare name (PATH search, matching what execvp
+    would have done anyway) and an absolute path (existence + exec bit),
+    so a malformed or dangling Exec= line now makes this browser resolve
+    to None -- routing falls back to another browser instead of trying to
+    exec whatever the line said."""
     desktop_id = BROWSER_DESKTOP_IDS[browser_id]
     for directory in APPLICATION_DIRS:
         path = directory / desktop_id
@@ -75,8 +87,11 @@ def resolve_binary(browser_id: str) -> str | None:
         for line in path.read_text().splitlines():
             if line.startswith("Exec="):
                 exec_line = line[len("Exec=") :].strip()
-                if exec_line:
-                    return exec_line.split()[0]
+                if not exec_line:
+                    continue
+                resolved = shutil.which(exec_line.split()[0])
+                if resolved is not None:
+                    return resolved
     return None
 
 

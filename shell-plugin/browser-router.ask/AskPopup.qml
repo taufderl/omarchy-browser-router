@@ -55,13 +55,26 @@ Item {
     return "t=$(mktemp); : > \"$t\"; mv -f \"$t\" " + Util.shellQuote(doneFile)
   }
 
+  // Same mktemp-then-mv pattern as touchDoneFileCmd() above, generalized
+  // to carry real content: bash's own tools for "write with content" are
+  // all truncating redirects (`>`, `printf ... >`), which follow a
+  // symlink planted at the destination. bin/browser-router now hands out
+  // selectionFile/doneFile inside a mode-0700 directory it creates
+  // itself, which already stops another user from planting anything
+  // there -- but writing this way too means neither file's write depends
+  // on that directory permission being the only thing standing between a
+  // truncating redirect and a symlink.
+  function writeFileCmd(path, content) {
+    return "t=$(mktemp); printf %s " + Util.shellQuote(content) + " > \"$t\"; mv -f \"$t\" " + Util.shellQuote(path)
+  }
+
   // Writes the answer for the CURRENTLY ACTIVE request (root.selectionFile
   // / root.doneFile) and touches its done-file. Quoted via Util.shellQuote,
   // not string-interpolated raw -- same rule this project applies to every
   // other shell-command construction.
   function resolveRequest(browser, remember) {
-    var cmd = "printf '%s\\n%s\\n' " + Util.shellQuote(browser || "") + " " + Util.shellQuote(remember || "")
-      + " > " + Util.shellQuote(root.selectionFile)
+    var content = (browser || "") + "\n" + (remember || "") + "\n"
+    var cmd = root.writeFileCmd(root.selectionFile, content)
       + "; " + root.touchDoneFileCmd(root.doneFile)
     Quickshell.execDetached(["bash", "-c", cmd])
   }
@@ -71,7 +84,7 @@ Item {
   // while another is already showing (see open()).
   function resolveEmptyFor(selectionFile, doneFile) {
     if (!selectionFile || !doneFile) return
-    var cmd = "> " + Util.shellQuote(selectionFile) + "; " + root.touchDoneFileCmd(doneFile)
+    var cmd = root.writeFileCmd(selectionFile, "") + "; " + root.touchDoneFileCmd(doneFile)
     Quickshell.execDetached(["bash", "-c", cmd])
   }
 

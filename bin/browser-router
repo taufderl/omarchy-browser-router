@@ -25,6 +25,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,7 +34,24 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 FALLBACK_BROWSER = "brave"
-ASK_TIMEOUT_SECONDS = float(os.environ.get("ASK_TIMEOUT_SECONDS", 30))
+
+
+def _parse_ask_timeout() -> float:
+    # Runs at import time, before main()'s own try/except -- a bad value
+    # here must not raise, or a malformed ASK_TIMEOUT_SECONDS would crash
+    # the router before any URL is handled and before fallback() ever
+    # runs, contradicting "every failure still opens a browser". A
+    # non-positive value is nonsensical as a poll deadline (0 never lets
+    # the popup answer in time; negative is immediately expired), so it's
+    # treated the same as unparseable.
+    try:
+        value = float(os.environ.get("ASK_TIMEOUT_SECONDS", 30))
+    except (TypeError, ValueError):
+        return 30.0
+    return value if value > 0 else 30.0
+
+
+ASK_TIMEOUT_SECONDS = _parse_ask_timeout()
 
 USAGE = """browser-router: opens a URL in whichever browser its domain is routed to
 by ~/.config/browser-router/config.yaml (see browser-router-config).
@@ -42,8 +60,42 @@ Usage: browser-router [URL]"""
 
 
 def fallback(url: str | None = None) -> None:
+    """Last resort: launch *some* browser or die trying. Tries the
+    hard-coded FALLBACK_BROWSER first (the common case, and independent
+    of whether config/browser-router-config loaded at all), then --
+    only if that's not actually installed -- every other browser id this
+    machine has a .desktop entry for. Loads its own config module
+    instance rather than relying on a caller's `brc`, since this can be
+    reached before main() ever gets one (see the load_config_module()
+    failure path). Only prints and exits if truly nothing on the system
+    can be exec'd, instead of letting an uncaught FileNotFoundError from
+    a missing `brave` silently drop the link with no window and no
+    explanation."""
     argv = [FALLBACK_BROWSER, "--"] + ([url] if url else [])
-    os.execvp(FALLBACK_BROWSER, argv)
+    try:
+        os.execvp(FALLBACK_BROWSER, argv)
+    except OSError:
+        pass
+
+    try:
+        brc = load_config_module()
+        for browser_id in brc.BROWSER_IDS:
+            binary = brc.resolve_binary(browser_id)
+            if binary is None:
+                continue
+            try:
+                os.execvp(binary, [binary, "--"] + ([url] if url else []))
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+    print(
+        f"browser-router: no browser could be launched (tried '{FALLBACK_BROWSER}' "
+        "and every other configured browser)",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def load_config_module():
@@ -79,8 +131,19 @@ def ask_and_resolve(brc, data: dict, host: str) -> str | None:
     if busy.returncode != 0 or busy.stdout.strip() == "true":
         return None
 
-    selection_file = tempfile.mktemp()
-    done_file = tempfile.mktemp()
+    # A private (mode 0700) directory, not two loose tempfile.mktemp()
+    # names: mktemp only returns a name without creating it, so on a
+    # shared host anyone who reads these paths out of this process's argv
+    # (visible via /proc/<pid>/cmdline for the ~ASK_TIMEOUT_SECONDS the
+    # popup is open) could plant a symlink at either path before the QML
+    # side writes to it -- and a plain `>` redirect follows symlinks. A
+    # 0700 directory closes that off categorically: no other user can
+    # create anything inside it, symlink or otherwise, so the path being
+    # visible in argv no longer matters for this. mkdtemp() creates it
+    # atomically with that mode from the start, not via a later chmod.
+    req_dir = tempfile.mkdtemp(prefix="browser-router-ask-")
+    selection_file = os.path.join(req_dir, "selection")
+    done_file = os.path.join(req_dir, "done")
     try:
         payload = json.dumps({
             "host": host,
@@ -111,8 +174,7 @@ def ask_and_resolve(brc, data: dict, host: str) -> str | None:
 
         return brc.resolve_binary(choice)
     finally:
-        Path(selection_file).unlink(missing_ok=True)
-        Path(done_file).unlink(missing_ok=True)
+        shutil.rmtree(req_dir, ignore_errors=True)
 
 
 def main() -> None:
