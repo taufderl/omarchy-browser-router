@@ -101,7 +101,7 @@ def extract_host(url: str) -> str | None:
     Dropping Node meant finding a way to keep that guarantee without a
     second language, and no Python stdlib or GLib parser is WHATWG-correct
     either (both tested against that exact attack URL and got it wrong the
-    same way the original bug did -- see TODO.md).
+    same way the original bug did).
 
     The approach here sidesteps needing a correct parser at all: accept
     only the subset of URLs where no parser could disagree in the first

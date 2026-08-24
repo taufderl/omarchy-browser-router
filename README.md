@@ -138,7 +138,8 @@ disagreed with Chromium on backslashes in the authority component
 the shell, `evil.example` in Chromium), letting a crafted link bypass
 routing -- see `docs/codex-review.md`. The fix was Node's `URL`, a real
 WHATWG parser, since Python's `urllib.parse` and GLib's `GUri` both get
-that exact case wrong too (verified directly, see `TODO.md`).
+that exact case wrong too (verified directly against the same attack
+URL).
 
 Node is gone now. `extract_host()` in `bin/browser-router-config`
 doesn't parse URLs so much as recognize a narrow, provably-unambiguous
@@ -169,6 +170,20 @@ hot-reload can leave a `keepLoaded` overlay's *visual* tree stale after
 rapid edits even though its backend state stays correct, which makes
 this easy to misdiagnose. `omarchy restart shell` after an edit is the
 reliable way to see the real result.
+
+`bin/browser-router` special-cases `-h`/`--help` rather than letting
+them fail closed like any other non-URL input would -- not our design
+choice. It's the registered default browser's `Exec` target, so
+`omarchy-launch-browser` (Omarchy core) goes through it, and that script
+probes `$browser_exec --help | grep -q MOZ_LOG` on **every single
+invocation, uncached**, to detect Firefox-vs-Chromium flag naming before
+the real launch -- so every link costs two spawns of `browser-router`,
+the probe and the real one. Without the special case, that probe -- not
+a URL -- would fail parsing like any other bad link and pop a real
+browser window navigated to the literal text `--help` (the bug this
+fixed). Omarchy does this regardless of whether `browser-router` handles
+it well, since it has no way to know it's talking to a dispatcher rather
+than a real browser.
 
 Omarchy's own Setup > Defaults > Browser menu doesn't know about
 browser-router: its seven rows and the `omarchy-default-browser` command

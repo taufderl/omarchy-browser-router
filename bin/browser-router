@@ -15,10 +15,10 @@ unavailable -- falls back to launching brave directly.
 -h/--help print usage and exit before anything else touches the URL:
 other Omarchy tooling that treats the registered default browser like a
 real browser binary probes it with --help (omarchy-launch-browser, to
-detect Firefox-vs-Chromium flag names -- see TODO.md for why this exists
-at all). Without this, that probe would fail URL parsing like any other
-non-URL input and pop a real browser window navigated to the literal
-text "--help".
+detect Firefox-vs-Chromium flag names -- see README.md's Design notes
+for why this exists at all). Without this, that probe would fail URL
+parsing like any other non-URL input and pop a real browser window
+navigated to the literal text "--help".
 """
 
 import importlib.machinery
