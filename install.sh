@@ -99,7 +99,10 @@ import json, os, sys
 path = os.path.expanduser("~/.config/omarchy/extensions/omarchy-menu.jsonc")
 key = "setup.default.browser.browser-router"
 entry = {
-    "icon": "",
+    # nf-md-router (U+F06F3) -- same glyph this file's own "setup.network"
+    # row already uses, so it's a font/rendering pairing already proven to
+    # work here rather than a guessed codepoint.
+    "icon": "\U000f06f3",
     "label": "Browser Router",
     "when": "omarchy-cmd-present browser-router",
     "checked": '[[ "$(omarchy-default-browser)" == "browser-router.desktop" ]]',
@@ -116,11 +119,19 @@ if not os.path.exists(path):
     sys.exit(0)
 
 text = open(path).read()
-if f'"{key}"' in text:
-    print("Defaults > Browser already has a Browser Router entry")
-    sys.exit(0)
-
 lines = text.splitlines()
+
+existing_idx = next((i for i, l in enumerate(lines) if f'"{key}"' in l), None)
+if existing_idx is not None:
+    if lines[existing_idx].strip().rstrip(",") == new_line.strip():
+        print("Defaults > Browser entry for Browser Router is already up to date")
+        sys.exit(0)
+    trailing_comma = lines[existing_idx].rstrip().endswith(",")
+    lines[existing_idx] = new_line + ("," if trailing_comma else "")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"Updated the Defaults > Browser entry for Browser Router in {path}")
+    sys.exit(0)
 close_idx = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip() == "}"), None)
 if close_idx is None:
     print(f"warning: couldn't find a closing '}}' in {path} -- "
