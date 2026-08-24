@@ -51,8 +51,15 @@ Item {
   // in that window. mktemp a fresh file (guaranteed not pre-existing) and
   // `mv` it into place instead -- rename(2) replaces whatever's at the
   // destination path without dereferencing it, symlink or not.
+  // `--` before the destination: doneFile/selectionFile are always our
+  // own mktemp-dir paths today (never attacker-shaped), but `mv`, like
+  // any getopt-style tool, would otherwise read a value starting with
+  // "-" as its own flag instead of a destination operand -- the same
+  // "--" convention this project already applies everywhere else an
+  // operand could theoretically be flag-shaped (extract_host's URL
+  // validation, the final browser exec).
   function touchDoneFileCmd(doneFile) {
-    return "t=$(mktemp); : > \"$t\"; mv -f \"$t\" " + Util.shellQuote(doneFile)
+    return "t=$(mktemp); : > \"$t\"; mv -f -- \"$t\" " + Util.shellQuote(doneFile)
   }
 
   // Same mktemp-then-mv pattern as touchDoneFileCmd() above, generalized
@@ -65,7 +72,7 @@ Item {
   // on that directory permission being the only thing standing between a
   // truncating redirect and a symlink.
   function writeFileCmd(path, content) {
-    return "t=$(mktemp); printf %s " + Util.shellQuote(content) + " > \"$t\"; mv -f \"$t\" " + Util.shellQuote(path)
+    return "t=$(mktemp); printf %s " + Util.shellQuote(content) + " > \"$t\"; mv -f -- \"$t\" " + Util.shellQuote(path)
   }
 
   // Writes the answer for the CURRENTLY ACTIVE request (root.selectionFile
@@ -199,6 +206,16 @@ Item {
         Text {
           width: parent.width
           text: "New site: " + root.host
+          // root.host is always LDH-only by the time bin/browser-router
+          // summons this popup (extract_host()/is_valid_domain() already
+          // rejected anything else), so this is defense-in-depth, not a
+          // fix for a reachable path today: `open()` takes root.host
+          // straight from the summon payload with no re-validation of
+          // its own, and Text's default textFormat (AutoText) renders
+          // markup, so anything that could ever summon this popup
+          // directly with an unvalidated host wouldn't be caught by
+          // upstream validation it never went through.
+          textFormat: Text.PlainText
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading

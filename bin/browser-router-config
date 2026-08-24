@@ -10,9 +10,11 @@ and any external caller that wants a subprocess boundary instead.
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -64,6 +66,25 @@ APPLICATION_DIRS = [
 ]
 
 
+# resolve_binary() below execvp's whatever it returns as [binary, "--", url]
+# (bin/browser-router). For a real browser binary, `--` ends option
+# parsing and url is just an operand the browser opens. A shell or
+# interpreter, run the exact same way, does not treat `--` as "no more
+# options AND no positional filename either" -- it takes url as a
+# script/module to run (e.g. `sh -- <url>` reads <url> as a shell script
+# path). None of these are ever a *browser* itself, so a .desktop Exec=
+# line that resolves to one -- malformed, or a wrapper this parser
+# doesn't understand yet (see the module docstring's note on env/flatpak
+# wrappers), or hostile -- should make this browser resolve to None
+# (routing falls back to another browser) rather than hand back
+# something that turns the URL into a script/command target.
+_REJECTED_INTERPRETER_BASENAMES = {
+    "sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish",
+    "env", "python", "python2", "python3", "perl", "ruby", "lua",
+    "node", "nodejs", "tclsh", "wish", "osascript", "powershell", "pwsh",
+}
+
+
 def resolve_binary(browser_id: str) -> str | None:
     """The executable a browser id's .desktop Exec= line points at, or None
     if not installed. Looked up rather than guessed: AUR packaging doesn't
@@ -78,7 +99,9 @@ def resolve_binary(browser_id: str) -> str | None:
     would have done anyway) and an absolute path (existence + exec bit),
     so a malformed or dangling Exec= line now makes this browser resolve
     to None -- routing falls back to another browser instead of trying to
-    exec whatever the line said."""
+    exec whatever the line said. A resolved binary whose basename is a
+    known shell/interpreter is rejected the same way -- see
+    _REJECTED_INTERPRETER_BASENAMES above."""
     desktop_id = BROWSER_DESKTOP_IDS[browser_id]
     for directory in APPLICATION_DIRS:
         path = directory / desktop_id
@@ -90,8 +113,11 @@ def resolve_binary(browser_id: str) -> str | None:
                 if not exec_line:
                     continue
                 resolved = shutil.which(exec_line.split()[0])
-                if resolved is not None:
-                    return resolved
+                if resolved is None:
+                    continue
+                if os.path.basename(resolved) in _REJECTED_INTERPRETER_BASENAMES:
+                    continue
+                return resolved
     return None
 
 
@@ -142,6 +168,19 @@ def extract_host(url: str) -> str | None:
     else:
         host = authority
     host = host.lower()
+    # A single trailing dot marks an FQDN as relative to the DNS root --
+    # `google.com.` and `google.com` resolve identically and every real
+    # browser navigates them the same way, so leaving it in place here
+    # would make it trivial to dodge a domain's configured route by
+    # tacking on a dot: is_valid_domain() rejects a trailing dot (no
+    # empty label after the last one), so `extract_host()` used to return
+    # None for it -- not "invalid URL, fall back", but "silently skip the
+    # explicit route" for what's the same site. Stripped before
+    # validation, not after: a string ending in multiple dots
+    # ("example.com..") is genuinely malformed and must keep failing
+    # closed via the regex, which this only strips one of, not rstrip()s.
+    if host.endswith("."):
+        host = host[:-1]
     return host if is_valid_domain(host) else None
 
 
@@ -216,13 +255,32 @@ def load_validated(path: Path) -> dict:
 def write_config(path: Path, data: dict) -> None:
     """Canonical form: `default`, then each BROWSER_IDS key in order with
     sorted lowercased domains. Same output regardless of which subcommand
-    last wrote it."""
+    last wrote it.
+
+    Written to a temp file in the same directory and moved into place
+    with os.replace() (atomic rename on the same filesystem) rather than
+    truncating `path` directly: opening with mode "w" empties the file
+    before writing a single byte of the new content, so a concurrent
+    `check`/`resolve` -- or bin/browser-router's own load_validated() on
+    the next URL, since ask mode's "remember" path calls this from a
+    completely separate process invocation -- reading at exactly the
+    wrong moment sees a truncated or empty file and fails validation.
+    That's not a security compromise (it fails closed to the default
+    browser like any other invalid config), but it's a needless,
+    entirely avoidable failure for what set_domain()/reset_domain()/
+    cmd_set_default() intend as a single atomic update."""
     ordered = {"default": data["default"]}
     for b in BROWSER_IDS:
         ordered[b] = sorted(d.lower() for d in data.get(b, []))
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        yaml.safe_dump(ordered, f, default_flow_style=False, sort_keys=False)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.safe_dump(ordered, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp_name, path)
+    except BaseException:
+        os.unlink(tmp_name)
+        raise
 
 
 def resolve_explicit(data: dict, host: str) -> str | None:
