@@ -31,12 +31,34 @@
 # path -- shell unreachable, popup busy, timeout, cancel -- falls through to
 # the same fallback as everything else, so ask mode can only ever add a
 # prompt, never weaken the fail-closed behavior above.
+#
+# -h/--help are handled before any of that and never open a browser at all.
+# This script is registered as the system default browser's Exec target, so
+# other tooling that probes "the default browser" the way a real browser
+# binary behaves invokes it directly: omarchy-launch-browser runs
+# `$browser_exec --help` to sniff Firefox-vs-Chromium flag names before its
+# real launch. Every other argument here is data (a URL to route, or an
+# invalid one to fail closed on) -- these two are the one case that must
+# act like a CLI flag instead, matching what a real browser binary does for
+# --help (print usage, exit, no window). Without this, that probe hits the
+# same "not a valid URL" fallback as any other unparseable input and pops a
+# real, visible browser window navigated to the literal text "--help".
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 CONFIG_TOOL="$SCRIPT_DIR/browser-router-config"
 ASK_TIMEOUT_SECONDS="${ASK_TIMEOUT_SECONDS:-30}"
 
 url="$1"
+
+if [[ $url == "-h" || $url == "--help" ]]; then
+  cat <<'EOF'
+browser-router: opens a URL in whichever browser its domain is routed to
+by ~/.config/browser-router/config.yaml (see browser-router-config).
+
+Usage: browser-router [URL]
+EOF
+  exit 0
+fi
 
 fallback() { exec brave -- "$@"; }
 

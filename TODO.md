@@ -45,6 +45,49 @@ if:
 - Node's footprint becomes an actual reported problem for someone running
   this without existing dev tooling, rather than a theoretical one.
 
+## Why bin/browser-router handles --help at all (not our design choice)
+
+Not a TODO either -- recording why this exists, since it looks like
+pointless overhead at a glance.
+
+`bin/browser-router` is registered as the system default browser's `Exec`
+target, so anything that opens links via `omarchy-launch-browser`
+(`/usr/share/omarchy/bin/omarchy-launch-browser`, owned by Omarchy core --
+not this project, never edit it directly) goes through it. That script
+runs, on **every single invocation, with no caching or memoization**:
+
+```bash
+if $browser_exec --help 2>/dev/null | grep -q MOZ_LOG; then
+  private_flag="--private-window"
+...
+```
+
+-- spawning `browser_exec --help` (which resolves to `browser-router
+--help` once this project is the default browser) purely to sniff whether
+the default browser is Firefox-flavored, so it knows which flag name means
+"private window" for the *next* invocation, the real one, that actually
+opens the URL. So every link opened this way costs two process spawns of
+`browser-router`, not one: the probe, then the real launch.
+
+This is why `bin/browser-router` special-cases `-h`/`--help` at all rather
+than just letting them fail closed like any other unparseable input would
+(see the commit that added it, and the crash it was fixing: a homeserver
+plugin's tailscale link opening Brave navigated to the literal text
+`--help`, because the probe's `--help` invocation isn't a URL, and without
+special-casing it, "not a URL" means "fail closed to a real Brave window,"
+same as any other genuinely bad link). Handling it isn't optional --
+omarchy-launch-browser will keep doing this on every launch regardless of
+whether this project's `--help` handling is fast, correct, both, or
+missing entirely, since it has no way to know it's talking to a
+non-browser dispatcher rather than a real browser binary.
+
+Nothing to actually fix here -- the overhead is Omarchy's own launcher's
+design (re-probing every time instead of caching the Firefox/Chromium
+flag-name detection once), not something `bin/browser-router` can opt out
+of from its side. Just documenting it so "why does this run on literally
+every link click" has an answer on file instead of getting re-investigated
+later.
+
 ## Consider dropping Node for config/YAML too? No.
 
 Not actually a TODO -- noting the boundary so it isn't re-litigated.
