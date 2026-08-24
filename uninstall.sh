@@ -48,6 +48,40 @@ if [[ -d $PLUGIN_DEST ]]; then
   echo "Removed the ask-mode popup ($PLUGIN_DEST)"
 fi
 
+# Remove the Defaults > Browser menu entry install.sh added, if present.
+# Only touches this one dotted key -- leaves the rest of the user's
+# extensions file untouched.
+python3 - <<'PYEOF'
+import os, sys
+
+path = os.path.expanduser("~/.config/omarchy/extensions/omarchy-menu.jsonc")
+key = "setup.default.browser.browser-router"
+if not os.path.exists(path):
+    sys.exit(0)
+
+lines = open(path).read().splitlines()
+idx = next((i for i, l in enumerate(lines) if f'"{key}"' in l), None)
+if idx is None:
+    sys.exit(0)
+
+del lines[idx]
+# JSON forbids a trailing comma before the closing brace -- strip one if
+# our removed entry was the last real one before it.
+close_idx = next((i for i in range(idx, len(lines)) if lines[i].strip() == "}"), None)
+if close_idx is not None:
+    prev_idx = next(
+        (i for i in range(close_idx - 1, -1, -1)
+         if lines[i].strip() and not lines[i].strip().startswith("//") and lines[i].strip() != "{"),
+        None,
+    )
+    if prev_idx is not None and lines[prev_idx].rstrip().endswith(","):
+        lines[prev_idx] = lines[prev_idx].rstrip()[:-1]
+
+with open(path, "w") as f:
+    f.write("\n".join(lines) + "\n")
+print(f"Removed the Defaults > Browser entry for Browser Router from {path}")
+PYEOF
+
 if (( PURGE )); then
   rm -rf "$CONFIG_DIR"
   echo "Removed $CONFIG_DIR (config.yaml included)"

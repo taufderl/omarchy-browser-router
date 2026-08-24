@@ -18,7 +18,10 @@ involved:
   here instead of being reimplemented in shell.
 - `share/applications/browser-router.desktop` registers `browser-router`
   (`NoDisplay=true`, so it doesn't show up in app launchers).
-- `install.sh` points XDG's mime defaults at it via `xdg-mime`.
+- `install.sh` points XDG's mime defaults at it via `xdg-mime`, and adds
+  a "Browser Router" row to Omarchy's own Setup > Defaults > Browser menu
+  (see [Design notes](#design-notes)) so it shows up there like any real
+  browser, checkmark included.
 - `shell-plugin/browser-router.ask/` is a local Quickshell plugin -- the
   popup for [ask mode](#ask-mode).
 
@@ -34,9 +37,10 @@ silently open a link in some other configured browser.
 
 Installs both scripts to `~/.local/bin`, registers the desktop entry,
 creates `~/.config/browser-router/config.yaml` from the example if it
-doesn't exist, points XDG's mime defaults at it, and installs the
-ask-mode popup plugin. Records the previous default browser so
-`uninstall.sh` can restore it. Safe to re-run.
+doesn't exist, points XDG's mime defaults at it, adds the Setup >
+Defaults > Browser menu row mentioned above, and installs the ask-mode
+popup plugin. Records the previous default browser so `uninstall.sh` can
+restore it. Safe to re-run.
 
 ## Configure
 
@@ -165,6 +169,25 @@ hot-reload can leave a `keepLoaded` overlay's *visual* tree stale after
 rapid edits even though its backend state stays correct, which makes
 this easy to misdiagnose. `omarchy restart shell` after an edit is the
 reliable way to see the real result.
+
+Omarchy's own Setup > Defaults > Browser menu doesn't know about
+browser-router: its seven rows and the `omarchy-default-browser` command
+behind them are a fixed `case` statement in Omarchy core with no
+extension point of its own, so browser-router can't just add itself to
+that list. What it can do is the same thing any Omarchy user customizing
+their menu would: `~/.config/omarchy/extensions/omarchy-menu.jsonc` is a
+real, documented user-extension file, loaded by
+`shell/plugins/menu/Menu.qml` and merged on top of the built-in menu at
+render time -- reusing an existing dotted id overrides that row, a new
+one (`setup.default.browser.browser-router`) adds a sibling row under
+the existing "Defaults > Browser" submenu. `install.sh` adds exactly
+that one row there (idempotently, touching only that key), with `action` calling
+`xdg-settings set default-web-browser browser-router.desktop` directly
+rather than `omarchy-default-browser browser-router` (which doesn't
+recognize that id and would just print its usage). `uninstall.sh`
+removes the same single key. Since Quickshell's `FileView` watches that
+file (`watchChanges: true`) and reloads on change, the row appears
+without a shell restart.
 
 ## Limitations
 

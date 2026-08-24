@@ -84,6 +84,64 @@ else
   echo "Warning: shell-plugin/$PLUGIN_ID not found in this checkout, skipping ask-mode popup install" >&2
 fi
 
+# Adds a "Browser Router" row to Omarchy's own Setup > Defaults > Browser
+# menu, via the sanctioned user-extension mechanism documented in
+# ~/.config/omarchy/extensions/omarchy-menu.jsonc (loaded by
+# shell/plugins/menu/Menu.qml) -- omarchy-default-browser's own id list is
+# a fixed case statement in Omarchy core with no extension point of its
+# own, so this doesn't call it; it drives the same xdg-settings state
+# directly instead. Idempotent, and only touches this one dotted key --
+# never rewrites the rest of the user's file.
+if command -v omarchy-default-browser >/dev/null; then
+  python3 - <<'PYEOF'
+import json, os, sys
+
+path = os.path.expanduser("~/.config/omarchy/extensions/omarchy-menu.jsonc")
+key = "setup.default.browser.browser-router"
+entry = {
+    "icon": "",
+    "label": "Browser Router",
+    "when": "omarchy-cmd-present browser-router",
+    "checked": '[[ "$(omarchy-default-browser)" == "browser-router.desktop" ]]',
+    "action": "env -u BROWSER xdg-settings set default-web-browser browser-router.desktop "
+              "&& omarchy-notification-send 'Browser Router is now the default browser'",
+}
+new_line = "  " + json.dumps(key) + ": " + json.dumps(entry, separators=(",", ":"))
+
+if not os.path.exists(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("{\n" + new_line + "\n}\n")
+    print(f"Added a Defaults > Browser entry for Browser Router (created {path})")
+    sys.exit(0)
+
+text = open(path).read()
+if f'"{key}"' in text:
+    print("Defaults > Browser already has a Browser Router entry")
+    sys.exit(0)
+
+lines = text.splitlines()
+close_idx = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].strip() == "}"), None)
+if close_idx is None:
+    print(f"warning: couldn't find a closing '}}' in {path} -- "
+          "add the Defaults > Browser entry for browser-router manually, see README.md", file=sys.stderr)
+    sys.exit(0)
+
+prev_idx = next(
+    (i for i in range(close_idx - 1, -1, -1)
+     if lines[i].strip() and not lines[i].strip().startswith("//") and lines[i].strip() != "{"),
+    None,
+)
+if prev_idx is not None and not lines[prev_idx].rstrip().endswith(","):
+    lines[prev_idx] = lines[prev_idx].rstrip() + ","
+
+lines.insert(close_idx, new_line)
+with open(path, "w") as f:
+    f.write("\n".join(lines) + "\n")
+print(f"Added a Defaults > Browser entry for Browser Router to {path}")
+PYEOF
+fi
+
 echo
 echo "Installed. Current defaults:"
 for mime in "${MIME_TYPES[@]}"; do
