@@ -81,13 +81,16 @@ browser-router-config              # usage
 browser-router-config check        # validate; shows default, each
                                     # nonzero browser's domain count, and
                                     # warnings (not installed, overlaps)
-browser-router-config add chrome google.com
-browser-router-config default              # print the current default
-browser-router-config default brave        # change it
-browser-router-config default ask          # turn on ask mode
+browser-router-config set chrome google.com
+browser-router-config reset google.com     # remove a domain's route
+browser-router-config get-default          # print the current default
+browser-router-config set-default brave    # change it
+browser-router-config set-default ask      # turn on ask mode
 ```
 
-`add` rewrites the whole file, so hand-added comments won't survive it.
+Run `browser-router-config <command> --help` for the full description and
+arguments of any of these. `set`/`reset` rewrite the whole file, so
+hand-added comments won't survive them.
 
 ## Ask mode
 
@@ -95,7 +98,7 @@ With `default: ask`, a domain with no explicit route pops up a dialog
 instead of silently opening in a fixed browser: pick one of your
 *installed* browsers, and **Once** or **Remember** (default: Remember).
 Remember adds the domain to the browser you picked (same as
-`browser-router-config add`) and opens it there; Once just opens it.
+`browser-router-config set`) and opens it there; Once just opens it.
 
 Only triggers once everything else is healthy: URL parsed, config valid,
 this hostname has no explicit route. Every fail-closed path above is

@@ -106,7 +106,7 @@ def ask_and_resolve(brc, data: dict, host: str) -> str | None:
             return None
 
         if remember == "remember":
-            if brc.add_domain(data, choice, host) == "added":
+            if brc.set_domain(data, choice, host) == "set":
                 brc.write_config(brc.DEFAULT_CONFIG_PATH, data)
 
         return brc.resolve_binary(choice)

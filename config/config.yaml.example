@@ -16,7 +16,7 @@
 # Browser ids match `omarchy default browser --help`:
 # chromium, chrome, brave, brave-origin, edge, firefox, zen.
 #
-# Edit this by hand, or use: browser-router-config add <browser> <domain>
+# Edit this by hand, or use: browser-router-config set <browser> <domain>
 
 default: brave
 

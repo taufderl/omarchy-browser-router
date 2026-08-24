@@ -3,9 +3,9 @@
 hostname extraction (extract_host) -- see its docstring for why.
 
 bin/browser-router imports this module directly and calls its functions;
-it does not shell out to this file's CLI. The CLI (check/add/default/
-installed/binary/resolve) is for interactive use and any external caller
-that wants a subprocess boundary instead.
+it does not shell out to this file's CLI. The CLI (check/set/reset/
+get-default/set-default/installed/binary/resolve) is for interactive use
+and any external caller that wants a subprocess boundary instead.
 """
 
 import argparse
@@ -294,21 +294,36 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def add_domain(data: dict, browser: str, domain: str) -> str:
-    """Add `domain` -> `browser` to `data` in place (`domain` must already
-    be is_valid_domain). Returns "added", "unchanged" (already routed to
-    `browser`), or the conflicting browser's id (already routed elsewhere,
-    data left untouched). Caller writes the config back only on "added"."""
+def set_domain(data: dict, browser: str, domain: str) -> str:
+    """Route `domain` -> `browser` in `data` in place (`domain` must
+    already be is_valid_domain). Returns "set", "unchanged" (already
+    routed to `browser`), or the conflicting browser's id (already routed
+    elsewhere, data left untouched). Caller writes the config back only
+    on "set"."""
     for other in BROWSER_IDS:
         if other != browser and domain in [d.lower() for d in data.get(other, [])]:
             return other
     if domain in [d.lower() for d in data.get(browser, [])]:
         return "unchanged"
     data.setdefault(browser, []).append(domain)
-    return "added"
+    return "set"
 
 
-def cmd_add(args: argparse.Namespace) -> int:
+def reset_domain(data: dict, domain: str) -> str | None:
+    """Remove `domain`'s route from `data` in place, from whichever
+    browser has it (a domain is only ever routed to one). Returns that
+    browser's id, or None if `domain` wasn't routed anywhere -- caller
+    writes the config back only when a browser id comes back."""
+    for browser in BROWSER_IDS:
+        current = data.get(browser, [])
+        remaining = [d for d in current if d.lower() != domain]
+        if len(remaining) != len(current):
+            data[browser] = remaining
+            return browser
+    return None
+
+
+def cmd_set(args: argparse.Namespace) -> int:
     path = Path(args.config)
     domain = args.domain.strip().lower()
 
@@ -322,19 +337,43 @@ def cmd_add(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    result = add_domain(data, args.browser, domain)
-    if result == "added":
+    result = set_domain(data, args.browser, domain)
+    if result == "set":
         write_config(path, data)
-        print(f"Added '{domain}' -> '{args.browser}'")
+        print(f"Set '{domain}' -> '{args.browser}'")
         return 0
     if result == "unchanged":
         print(f"'{domain}' is already routed to '{args.browser}'")
         return 0
-    print(f"error: '{domain}' is already routed to '{result}'; remove it there first", file=sys.stderr)
+    print(f"error: '{domain}' is already routed to '{result}'; run 'reset {domain}' first", file=sys.stderr)
     return 1
 
 
-def cmd_default(args: argparse.Namespace) -> int:
+def cmd_reset(args: argparse.Namespace) -> int:
+    path = Path(args.config)
+    domain = args.domain.strip().lower()
+
+    if not is_valid_domain(domain):
+        print(f"error: '{args.domain}' doesn't look like a plain domain (no scheme, path, or @)", file=sys.stderr)
+        return 2
+
+    try:
+        data = load_validated(path)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    browser = reset_domain(data, domain)
+    if browser is None:
+        print(f"'{domain}' isn't routed to any browser")
+        return 0
+
+    write_config(path, data)
+    print(f"Removed '{domain}' (was routed to '{browser}')")
+    return 0
+
+
+def cmd_get_default(args: argparse.Namespace) -> int:
     path = Path(args.config)
     try:
         data = load_validated(path)
@@ -342,9 +381,17 @@ def cmd_default(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
-    if args.browser is None:
-        print(data["default"])
-        return 0
+    print(data["default"])
+    return 0
+
+
+def cmd_set_default(args: argparse.Namespace) -> int:
+    path = Path(args.config)
+    try:
+        data = load_validated(path)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
     old, new = data["default"], args.browser
     if new == old:
@@ -394,36 +441,118 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+EPILOG = """examples:
+  browser-router-config check
+  browser-router-config set chrome google.com
+  browser-router-config reset google.com
+  browser-router-config get-default
+  browser-router-config set-default brave
+  browser-router-config set-default ask
+  browser-router-config resolve google.com
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     # --config lives on each subparser (not the top-level parser too):
     # defining it in both places lets the subparser's own default silently
     # clobber a value already parsed from the command line, so only
     # `check --config X` (after the subcommand) is supported.
     config_option = argparse.ArgumentParser(add_help=False)
-    config_option.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="path to config.yaml")
+    config_option.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        metavar="PATH",
+        help=f"config file to use (default: {DEFAULT_CONFIG_PATH})",
+    )
 
-    parser = argparse.ArgumentParser(prog="browser-router-config", description="Validate, edit, and query browser-router's config.yaml.")
-    sub = parser.add_subparsers(dest="command")
+    parser = argparse.ArgumentParser(
+        prog="browser-router-config",
+        description="Validate, edit, and query browser-router's config.yaml.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="command", metavar="command")
 
-    sub.add_parser("check", help="validate the config file", parents=[config_option]).set_defaults(func=cmd_check)
+    sub.add_parser(
+        "check",
+        help="validate the config file and print a summary",
+        description="Validate the config file: schema, domain syntax, no domain routed to "
+                     "more than one browser. Prints the default, each configured browser's "
+                     "domain count, and warnings for anything worth a second look (a "
+                     "configured browser that isn't installed, a domain shadowed by a more "
+                     "specific one routed elsewhere) without failing validation over it.",
+        parents=[config_option],
+    ).set_defaults(func=cmd_check)
 
-    p_add = sub.add_parser("add", help="add a domain -> browser route", parents=[config_option])
-    p_add.add_argument("browser", choices=BROWSER_IDS)
-    p_add.add_argument("domain")
-    p_add.set_defaults(func=cmd_add)
+    p_set = sub.add_parser(
+        "set",
+        help="route a domain to a browser",
+        description="Route DOMAIN to BROWSER. Also covers DOMAIN's subdomains, unless one of "
+                     "them is routed elsewhere already. Refuses (without changing anything) if "
+                     "DOMAIN is already routed to a different browser -- run 'reset DOMAIN' "
+                     "first.",
+        parents=[config_option],
+    )
+    p_set.add_argument("browser", choices=BROWSER_IDS, help="browser id to route to")
+    p_set.add_argument("domain", help="domain to route, e.g. example.com")
+    p_set.set_defaults(func=cmd_set)
 
-    p_default = sub.add_parser("default", help="print the default, or set it (or 'ask')", parents=[config_option])
-    p_default.add_argument("browser", nargs="?", default=None, choices=DEFAULT_VALUES)
-    p_default.set_defaults(func=cmd_default)
+    p_reset = sub.add_parser(
+        "reset",
+        help="remove a domain's route",
+        description="Remove DOMAIN's route, whichever browser it's currently routed to. "
+                     "DOMAIN then falls back to the default (or ask mode) like any other "
+                     "unlisted domain. A no-op, not an error, if DOMAIN wasn't routed to "
+                     "begin with.",
+        parents=[config_option],
+    )
+    p_reset.add_argument("domain", help="domain to remove, e.g. example.com")
+    p_reset.set_defaults(func=cmd_reset)
 
-    sub.add_parser("installed", help="print installed browsers as JSON").set_defaults(func=cmd_installed)
+    sub.add_parser(
+        "get-default",
+        help="print the current default (or 'ask')",
+        description="Print the current default: a browser id, or 'ask' if ask mode is on.",
+        parents=[config_option],
+    ).set_defaults(func=cmd_get_default)
 
-    p_binary = sub.add_parser("binary", help="print the executable for a browser id")
-    p_binary.add_argument("browser", choices=BROWSER_IDS)
+    p_set_default = sub.add_parser(
+        "set-default",
+        help="change the default, or turn on ask mode",
+        description="Change what unlisted domains open in. BROWSER is a browser id, or the "
+                     "literal value 'ask' to prompt instead of using a fixed browser.",
+        parents=[config_option],
+    )
+    p_set_default.add_argument(
+        "browser", choices=DEFAULT_VALUES, help="browser id, or 'ask'"
+    )
+    p_set_default.set_defaults(func=cmd_set_default)
+
+    sub.add_parser(
+        "installed",
+        help="list installed browsers as JSON",
+        description="Print every browser id that resolves to an installed .desktop entry, "
+                     "as a JSON array of {id, label} objects.",
+    ).set_defaults(func=cmd_installed)
+
+    p_binary = sub.add_parser(
+        "binary",
+        help="print the executable for a browser id",
+        description="Print the executable BROWSER's .desktop entry points at, or fail if "
+                     "BROWSER isn't installed.",
+    )
+    p_binary.add_argument("browser", choices=BROWSER_IDS, help="browser id to look up")
     p_binary.set_defaults(func=cmd_binary)
 
-    p_resolve = sub.add_parser("resolve", help="print the binary for a hostname, or exit 3 to ask", parents=[config_option])
-    p_resolve.add_argument("host", help="hostname, or an empty string for the default")
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="print the binary a hostname routes to (or exit 3 to ask)",
+        description="Resolve HOST to a browser executable the way bin/browser-router itself "
+                     "would: print the binary and exit 0, or -- when ask mode should prompt "
+                     "for HOST instead -- print nothing and exit 3.",
+        parents=[config_option],
+    )
+    p_resolve.add_argument("host", help="hostname to resolve, or an empty string for the default")
     p_resolve.set_defaults(func=cmd_resolve)
 
     return parser

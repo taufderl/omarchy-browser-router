@@ -41,7 +41,7 @@ install -m 644 "$SCRIPT_DIR/share/applications/browser-router.desktop" "$DESKTOP
 
 if [[ ! -f $CONFIG_FILE ]]; then
   install -m 644 "$SCRIPT_DIR/config/config.yaml.example" "$CONFIG_FILE"
-  echo "Created $CONFIG_FILE (default: brave, no domains routed yet -- edit it or use browser-router-config add)"
+  echo "Created $CONFIG_FILE (default: brave, no domains routed yet -- edit it or use browser-router-config set)"
 else
   echo "Keeping existing $CONFIG_FILE"
 fi
@@ -161,4 +161,4 @@ done
 echo
 "$CONFIG_TOOL_DEST" check --config "$CONFIG_FILE" || true
 echo
-echo "Edit $CONFIG_FILE, or run: browser-router-config add <browser> <domain>"
+echo "Edit $CONFIG_FILE, or run: browser-router-config set <browser> <domain>"
